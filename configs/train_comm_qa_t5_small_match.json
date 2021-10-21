@@ -1,0 +1,29 @@
+{
+    "configs": [
+        {
+            "accumulate_grad_batches": 1,
+            "base_type": "t5-small",
+            "batch_size": 32,
+            "epochs": 10,
+            "load_worker_num": 8,
+            "load_prefetch_per_worker": 16,
+            "l2_regularization": 0,
+            "learning_rate": 1e-4,
+            "load": false,
+            "max_seq_length": 128,
+            "generate_length": 16,
+            "optimizer_class": "AdamW",
+            "use_matcher": true,
+            "seed": 697474,
+            "save": false
+        }
+    ],
+    "early_stopping_patience": 5,
+    "gpus": [
+        0
+    ],
+    "pipeline": [
+        "commonsense_qa"
+    ],
+    "working_directory": "/home/muhan/data/workspace/kb_encoder/train_comm_qa_t5_small_match"
+}

@@ -1,0 +1,17 @@
+cmake_minimum_required(VERSION 3.15)
+project(matcher)
+set(CMAKE_BUILD_TYPE Debug)
+set(CMAKE_CXX_STANDARD 17)
+
+#find_package(OpenMP)
+#if (OPENMP_FOUND)
+#    set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
+#    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+#    set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
+#endif()
+
+find_package(Python3 COMPONENTS Development)
+add_library(matcher init.cpp matcher.cpp)
+add_executable(test main.cpp)
+target_include_directories(matcher PUBLIC ${Python3_INCLUDE_DIRS})
+target_link_libraries(test matcher)
