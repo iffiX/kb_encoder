@@ -1,19 +1,17 @@
 import torch as t
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, BatchEncoding
-from pytorch_lightning.trainer.supporters import CombinedLoader
-from ..model.kb_ae import KBMaskedLMEncoder
+from transformers import AutoTokenizer, AutoModel, BatchEncoding
 from ..dataset.base import collate_function_dict_to_batch_encoding
-from ..dataset.kb.kdwd import KDWDBertDataset
-from ..utils.config import KBEncoderTrainConfig
+from ..dataset.c4_kb import C4KBDataset
+from ..utils.config import C4KBTrainConfig
 from ..utils.settings import proxies, model_cache_dir
 
 
-class KBEncoderTrainer(pl.LightningModule):
+class C4KBTrainer(pl.LightningModule):
     def __init__(
         self,
-        config: KBEncoderTrainConfig,
+        config: C4KBTrainConfig,
         stage_result_path="./",
         is_distributed=False,
         only_init_model=False,
