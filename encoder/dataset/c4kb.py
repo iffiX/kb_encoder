@@ -1,6 +1,7 @@
 import os
 import random
 import string
+import nltk
 import torch as t
 from typing import List
 from datasets import (
@@ -21,7 +22,6 @@ from encoder.utils.settings import (
 
 
 class C4KBDataset:
-    STOP_WORDS = set(stopwords.words("english") + list(string.punctuation))
     DEFAULT_SIMILARITY_EXCLUDE = [
         "the",
         "a",
@@ -70,6 +70,9 @@ class C4KBDataset:
             download_config=DownloadConfig(proxies=proxies),
             streaming=True,
         )
+        nltk.download("stopwords")
+        nltk.download("punkt")
+        self.stopwords = set(stopwords.words("english") + list(string.punctuation))
         worker_info = get_worker_info()
         if worker_info is not None:
             worker_id = worker_info.id
@@ -77,9 +80,13 @@ class C4KBDataset:
             worker_id = 0
 
         self.rnd = random.Random(c4_seed + worker_id)
-        self.train_data = iter(self.dataset["train"].shuffle(seed=c4_seed + worker_id))
+        self.train_data = iter(
+            self.dataset["train"].shuffle(buffer_size=10000, seed=c4_seed + worker_id)
+        )
         self.validate_data = iter(
-            self.dataset["validation"].shuffle(seed=c4_seed + worker_id)
+            self.dataset["validation"].shuffle(
+                buffer_size=10000, seed=c4_seed + worker_id
+            )
         )
 
     @property
@@ -115,7 +122,9 @@ class C4KBDataset:
                     shared_words = knowledge.intersection(ref_knowledge)
                     precision = len(shared_words) / len(knowledge)
                     recall = len(shared_words) / len(ref_knowledge)
-                    em_per_sample += 2 * precision * recall / (precision + recall)
+                    em_per_sample += (
+                        2 * precision * recall / (precision + recall + 1e-6)
+                    )
                 else:
                     break
             em_per_sample /= len(batch["knowledge_list"][i])
@@ -124,7 +133,7 @@ class C4KBDataset:
 
     def get_word_set(self, sentence: str):
         return set(
-            i for i in word_tokenize(sentence.lower()) if i not in self.STOP_WORDS
+            i for i in word_tokenize(sentence.lower()) if i not in self.stopwords
         )
 
     def generator(self, split: str):

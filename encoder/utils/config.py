@@ -4,50 +4,30 @@ from pprint import pprint
 from typing import *
 
 
-class KDWDConfig(BaseModel):
-    graph_depth: int = 1
-    permute_seed: int = 0
-    train_entity_encode_ratio: float = 0.9
-    train_relation_encode_ratio: float = 0.9
-    force_reload: bool = False
-    generate_data: bool = True
-    entity_number: int = 1000000
-    relation_mask_mode: str = "random"
-    relation_mask_random_probability: float = 0.15
-
-
-class KBEncoderTrainConfig(BaseModel):
+class C4KBTrainConfig(BaseModel):
     load: bool = False
     seed: int = 0
     save: bool = True
     epochs: int = 100
-    train_steps: Optional[int] = None
-    validate_steps: Optional[int] = None
+    train_steps: int = 100000
+    validate_steps: int = 1000
     batch_size: int = 2
     accumulate_grad_batches: int = 32
 
     optimizer_class: str = "Adam"
     learning_rate: float = 5e-5
     l2_regularization: float = 0
-    relation_size: int = 200
-    context_length: int = 32
-    max_seq_length: int = 64
 
-    # The process of generating samples for KB is complex
-    # and needs multiprocessing.
-    # This is the number of workers used in Dataloader.
+    base_type: str = "t5-large"
+    max_seq_length: int = 128
+    matcher_max_times: int = 300
+    matcher_max_depth: int = 2
+    matcher_max_edges: int = 6
+    matcher_similarity_exclude: List[str] = None
+
+    device_map: Optional[Dict[int, List[int]]] = None
     load_worker_num: Optional[int] = 0
     load_prefetch_per_worker: Optional[int] = 2
-
-    base_type: str = "bert-base-uncased"
-    base_configs: Dict[str, Any] = {}
-    relation_mode: str = "concatenation"
-    mlp_hidden_size: List[int] = []
-
-    # "entity" or "relation"
-    task: str = "entity"
-    dataset: str = "KDWD"
-    dataset_config: KDWDConfig = KDWDConfig()
 
 
 class QATrainConfig(BaseModel):
@@ -157,10 +137,7 @@ class Config(BaseModel):
     pipeline: List[str] = []
     configs: List[
         Union[
-            QATrainConfig,
-            KBEncoderTrainConfig,
-            CommonsenseQATrainConfig,
-            GLUETrainConfig,
+            QATrainConfig, C4KBTrainConfig, CommonsenseQATrainConfig, GLUETrainConfig,
         ]
     ] = []
 
@@ -175,8 +152,8 @@ def load_config(path: str) -> Config:
         )
         for p, c in zip(config_dict["pipeline"], config_dict["configs"]):
             config.pipeline.append(p)
-            if p == "kb_encoder":
-                config.configs.append(KBEncoderTrainConfig(**c))
+            if p == "c4kb":
+                config.configs.append(C4KBTrainConfig(**c))
             elif p == "qa":
                 config.configs.append(QATrainConfig(**c))
             elif p == "glue":
@@ -194,9 +171,9 @@ def generate_config(stages: List[str], path: str, print_config: bool = True):
         if stage == "qa":
             config.pipeline.append(stage)
             config.configs.append(QATrainConfig())
-        elif stage == "kb_encoder":
+        elif stage == "c4kb":
             config.pipeline.append(stage)
-            config.configs.append(KBEncoderTrainConfig())
+            config.configs.append(C4KBTrainConfig)
         elif stage == "glue":
             config.pipeline.append(stage)
             config.configs.append(GLUETrainConfig())

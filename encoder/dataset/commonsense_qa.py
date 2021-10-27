@@ -127,17 +127,37 @@ class CommonsenseQADataset:
                 "for",
                 "is",
                 "are",
+                "you",
+                "he",
             ]
+            # if split == "train":
+            #     match = self.matcher.match(
+            #         data["org_sentence"],
+            #         similarity_exclude=similarity_exclude + data["false_answers_match"],
+            #         rank_focus=data["answer_match"] + data["question_match"],
+            #         rank_exclude=data["false_answers_match"],
+            #         max_times=300,
+            #         max_depth=2,
+            #         max_edges=4,
+            #     )
+            # else:
+            #     match = self.matcher.match(
+            #         data["org_sentence"],
+            #         similarity_exclude=similarity_exclude,
+            #         rank_focus=data["question_match"],
+            #         max_times=300,
+            #         max_depth=2,
+            #         max_edges=4,
+            #     )
             match = self.matcher.match(
                 data["org_sentence"],
-                similarity_exclude=similarity_exclude + data["false_answers_match"],
-                rank_focus=data["answer_match"],
-                rank_exclude=data["false_answers_match"],
+                similarity_exclude=similarity_exclude,
+                rank_focus=data["question_match"],
                 max_times=300,
-                max_depth=2,
-                max_edges=2,
+                max_depth=3,
+                max_edges=9,
             )
-            new_sentence = self.matcher.insert_matches(data["org_sentence"], match)
+            new_sentence = self.matcher.insert_match(data["org_sentence"], match)
             # BERT tokenizer doesn't honor T5 eos token / Roberta sep token
             # and choice brackets, fix it.
             # Have no effect for BERT, ALBERT.
@@ -266,6 +286,18 @@ class CommonsenseQADataset:
 
     def parse_data(self, path):
         data = []
+        sep = None
+        if (
+            hasattr(self.tokenizer, "sep_token")
+            and self.tokenizer.sep_token is not None
+        ):
+            # BERT, ALBERT, ROBERTA
+            sep = self.tokenizer.sep_token
+        elif (
+            hasattr(self.tokenizer, "eos_token")
+            and self.tokenizer.eos_token is not None
+        ):
+            sep = self.tokenizer.eos_token
         with open_file_with_create_directories(path, "r") as file:
             for line in file:
                 entry = json.loads(line)
@@ -278,18 +310,9 @@ class CommonsenseQADataset:
                         ch["text"] for ch in entry["question"]["choices"]
                     )
 
-                if hasattr(self.tokenizer, "sep_token"):
-                    # BERT, ALBERT, ROBERTA
+                if sep is not None:
                     org_sentence = (
-                        entry["question"]["stem"]
-                        + f" {self.tokenizer.sep_token} "
-                        + sentence_choices
-                    )
-                elif hasattr(self.tokenizer, "eos_token"):
-                    org_sentence = (
-                        entry["question"]["stem"]
-                        + f" {self.tokenizer.eos_token} "
-                        + sentence_choices
+                        entry["question"]["stem"] + f" {sep} " + sentence_choices
                     )
                 else:
                     org_sentence = entry["question"]["stem"] + " " + sentence_choices
@@ -322,6 +345,7 @@ class CommonsenseQADataset:
                     "question": self.tokenizer.encode(
                         entry["question"]["question_concept"], add_special_tokens=False
                     ),
+                    "question_match": [entry["question"]["question_concept"]],
                     "choices": choices,
                     "id": entry["id"],
                 }
@@ -367,7 +391,7 @@ class CommonsenseQADataset:
                         ch["text"]
                         for ch in entry["question"]["choices"]
                         if ch["label"] == entry["answerKey"]
-                    ] + [entry["question"]["question_concept"]]
+                    ]
 
                     preprocessed["false_answers_match"] = [
                         ch["text"]

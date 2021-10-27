@@ -11,7 +11,8 @@ from datasets import (
     DownloadConfig,
 )
 from transformers import PreTrainedTokenizerBase, BatchEncoding
-from encoder.trainer.kb_trainer import KBEncoderTrainer
+
+# from encoder.trainer.kb_trainer import KBEncoderTrainer
 from encoder.utils.file import open_file_with_create_directories
 from encoder.utils.settings import (
     dataset_cache_dir,

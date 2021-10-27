@@ -4,7 +4,7 @@ import logging
 import torch as t
 import pytorch_lightning as pl
 from ..utils.config import *
-from .kb_trainer import KBEncoderTrainer
+from .c4kb_trainer import C4KBTrainer
 from .qa_trainer import QATrainer
 from .glue_trainer import GLUETrainer
 from .comm_qa_trainer import CommonsenseQATrainer
@@ -49,8 +49,8 @@ def train(config: Config, stage_index: int, only_test: bool = False):
 
     if not only_test:
         logging.info("Training.")
-        if stage == "kb_encoder":
-            stage_trainer = KBEncoderTrainer(
+        if stage == "c4kb":
+            stage_trainer = C4KBTrainer(
                 stage_config, stage_result_path, is_distributed=is_distributed,
             )
         elif stage == "qa":
@@ -138,10 +138,8 @@ def train(config: Config, stage_index: int, only_test: bool = False):
         # in a previous run.
         # the ckpt_path in test will be ignored in this case.
         # and must perform manual load
-        if stage == "kb_encoder":
-            stage_trainer = KBEncoderTrainer.load_from_checkpoint(
-                checkpoint_path=checkpoint
-            )
+        if stage == "c4kb":
+            stage_trainer = C4KBTrainer.load_from_checkpoint(checkpoint_path=checkpoint)
         elif stage == "qa":
             stage_trainer = QATrainer.load_from_checkpoint(checkpoint_path=checkpoint)
         elif stage == "glue":

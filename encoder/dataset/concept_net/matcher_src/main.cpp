@@ -4,7 +4,22 @@
 #include <fstream>
 #include <iostream>
 #include "matcher.h"
+#include "concept_net.h"
 using namespace std;
+#include <ctime>
+#define TIME_BEGIN(timer_num) \
+    struct timeval timer_ ##timer_num## _start;\
+    gettimeofday(&timer_ ##timer_num ##_start, NULL);
+
+#define TIME_END(timer_num) \
+    struct timeval timer_ ##timer_num## _end;\
+    gettimeofday(&timer_ ##timer_num## _end, NULL);\
+    {\
+        double msec = (double)(timer_ ##timer_num## _end.tv_usec - timer_ ##timer_num## _start.tv_usec) / 1000 +\
+                      (double)(timer_ ##timer_num## _end.tv_sec - timer_ ##timer_num## _start.tv_sec) * 1000;\
+        printf(">>> timer_" #timer_num ":    %.3lf ms\n", msec);\
+    }
+
 
 template <typename T>
 std::ostream& operator<< (std::ostream& out, const std::vector<std::vector<T>>& vec) {
@@ -86,15 +101,15 @@ int main() {
     // 1, 3, 5 for checking partial match (1, 3, and 1, 3, 5, 6)
 //    cout << trie.matchForAll({9, 3, 4, 1, 3, 5, 1, 2, 8, 16, 1, 3, 4, 9}) << endl;
 
-//    ConceptNetReader reader("/data/conceptnet-assertions-5.7.0.csv");
-//    cout << "Node num: " << reader.nodes.size() << endl;
-//    cout << "Relation num: " << reader.relationships.size() << endl;
-//    cout << "Raw relation num: " << reader.rawRelationships.size() << endl;
-//    cout << "Edge num: " << reader.edges.size() << endl;
-//    cout << "Relations: " << reader.relationships << endl;
+//    ConceptNetReader kb("/data/conceptnet-assertions-5.7.0.csv");
+//    cout << "Node num: " << kb.nodes.size() << endl;
+//    cout << "Relation num: " << kb.relationships.size() << endl;
+//    cout << "Raw relation num: " << kb.rawRelationships.size() << endl;
+//    cout << "Edge num: " << kb.edges.size() << endl;
+//    cout << "Relations: " << kb.relationships << endl;
 
-//    ConceptNetReader reader("/data/conceptnet-assertions-5.7.0_slice.csv");
-//    ConceptNetMatcher matcher(reader);
+//    ConceptNetReader kb("/data/conceptnet-assertions-5.7.0_slice.csv");
+//    ConceptNetMatcher matcher(kb);
 //    matcher.save("/data/conceptnet-archive.data");
 //      ConceptNetMatcher matcher2("/data/conceptnet-archive.data");
 //      cout << matcher2.getNodeTrie() << endl;
@@ -106,19 +121,52 @@ int main() {
 //    trie.initializeFromString(line);
 //    cout << trie.serialize() << endl;
 
-//    std::vector<int> sentence{1996, 6404, 2187, 24302, 2018, 5407, 3243, 2214, 1010, 2002, 14876, 8630, 2009, 3139, 1999, 18282, 1999, 1996, 2067, 1997, 2010, 2054, 1029, 10135, 1010, 18097, 1010, 7852, 8758, 1010, 16716, 1010, 2873};
-//    ConceptNetMatcher matcher("/data/conceptnet-archive.data");
-//    cout << matcher.match(sentence, 1000, 2, 5, 1920301, {{18097}, {2187, 24302}}, {{1996}, {1037}, {2019}, {2002}, {2000}, {2010}}) << endl;
 
+//    ConceptNetReader reader;
+//    auto kb = reader.read("/data/conceptnet-assertions-5.7.0_slice.csv",
+//                "/data/numberbatch-en.txt",
+//                "/data/embedding.hdf5");
 
-    std::vector<int> sentence{71, 3, 60, 4571, 3745, 1365, 19, 4979, 21, 192, 2212, 1111, 6, 68, 34, 92, 4657, 38, 3, 9, 1034, 3613, 44, 3, 9, 125, 58, 4739, 6, 31866, 6, 221, 2274, 297, 1078, 6, 1982, 40, 6, 5534, 25453};
-    ConceptNetMatcher matcher("/data/conceptnet-archive.data");
-    cout << matcher.match(sentence, 1000, 2, 5, 1920301, {{18097}, {2187, 24302}}, {{1996}, {1037}, {2019}, {2002}, {2000}, {2010}}, {}) << endl;
+//    std::vector<int> sentence{71, 3, 60, 4571, 3745, 1365, 19, 4979, 21, 192, 2212, 1111, 6, 68, 34, 92, 4657, 38, 3, 9, 1034, 3613, 44, 3, 9, 125, 58, 4739, 6, 31866, 6, 221, 2274, 297, 1078, 6, 1982, 40, 6, 5534, 25453};
+//    KnowledgeMatcher matcher("/data/conceptnet-archive.data");
+//    cout << matcher.matchByToken(sentence, {}, 1000, 2, 5, 1920301, 0, {{18097}, {2187, 24302}}, {{1996}, {1037}, {2019}, {2002}, {2000}, {2010}}, {}) << endl;
 
-
-    // cout << matcher.match(sentence, 1000, 2, 5, 1920301, {}, {{1996}, {1037}, {2019}, {2002}, {2000}, {2010}}) << endl;
-    //
-//    cout << ConceptNetMatcher::filter({1, 2, 3, 4, 5}, {{2, 3}}) << endl;
-//    cout << ConceptNetMatcher::filter({1, 2, 3, 4, 5}, {{4, 5, 6}}) << endl;
-//    cout << ConceptNetMatcher::filter({1, 2, 3, 4, 5}, {{1}}) << endl;
+    std::vector<int> sentence{1037,
+                              24135,
+                              2341,
+                              2003,
+                              14057,
+                              2005,
+                              2048,
+                              3257,
+                              3604,
+                              1010,
+                              2021,
+                              2009,
+                              2036,
+                              4240,
+                              2004,
+                              1037,
+                              3036,
+                              5468,
+                              2012,
+                              1037,
+                              2054,
+                              1029};
+    std::vector<int> targetSentence{2924, 1010, 3075, 1010, 2533, 3573, 1010, 6670, 1010, 2047, 2259};
+    KnowledgeMatcher matcher("/data/conceptnet-archive.data");
+    matcher.kb.initLandmarks(100, 10, -1, "/data/conceptnet-landmark.cache");
+    // bank -> security, distance = 1
+    TIME_BEGIN(0);
+    for(int i = 0; i < 1000; i++)
+        matcher.kb.distance(2037, 9779);
+    TIME_END(0);
+    cout << matcher.kb.distance(2037, 9779) << endl;
+    // bank -> security measure, distance = 3
+    TIME_BEGIN(1);
+    for(int i = 0; i < 100; i++)
+        matcher.kb.distance(2037, 904700);
+    TIME_END(1);
+    cout << matcher.kb.distance(2037, 904700) << endl;
+    //cout << matcher.matchByNode(sentence, targetSentence, {}, {}, 300, 2, 5, 1920301, 0);
 }

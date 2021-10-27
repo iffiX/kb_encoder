@@ -1,14 +1,21 @@
-#ifndef MATCHER_SRC_MATCHER_H
-#define MATCHER_SRC_MATCHER_H
+#ifndef MATCHER_H
+#define MATCHER_H
+// Uncomment below macro to enable viewing the decision process
+//#define DEBUG
 #include "cista.h"
+#include "highfive/H5File.hpp"
+#include "highfive/H5DataSet.hpp"
+#include "highfive/H5DataSpace.hpp"
 #include "pybind11/stl.h"
 #include <string>
 #include <vector>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <iostream>
 
 using Edge = std::tuple<long, long, long, float, std::string>;
+using MatchResult = std::unordered_map<size_t, std::tuple<size_t, std::vector<std::vector<int>>>>;
 
 class TrieNode {
 public:
@@ -42,7 +49,29 @@ public:
     std::string serialize() const;
 };
 
-class ConceptNetReader {
+class KnowledgeBase {
+public:
+    struct SerializableEdge {
+        long source;
+        long relation;
+        long target;
+        float weight;
+        cista::raw::string annotation;
+    };
+
+    struct KnowledgeArchive {
+        cista::raw::hash_map<long, cista::raw::vector<size_t>> edgeToTarget;
+        cista::raw::hash_map<long, cista::raw::vector<size_t>> edgeFromSource;
+        cista::raw::vector<SerializableEdge> edges;
+        cista::raw::vector<cista::raw::string> nodes;
+        cista::raw::vector<cista::raw::string> relationships;
+        cista::raw::vector<cista::raw::vector<int>> tokenizedNodes;
+        cista::raw::vector<cista::raw::vector<int>> tokenizedRelationships;
+        cista::raw::vector<cista::raw::vector<int>> tokenizedEdgeAnnotations;
+        cista::raw::vector<cista::raw::string> rawRelationships;
+        cista::raw::string nodeEmbeddingFileName;
+    };
+
 public:
     // target id, edge ids point to the target.
     std::unordered_map<long, std::vector<size_t>> edgeToTarget;
@@ -52,36 +81,99 @@ public:
     std::vector<Edge> edges;
     std::vector<std::string> nodes;
     std::vector<std::string> relationships;
+    std::vector<std::string> rawRelationships;
+    std::unordered_set<size_t> disabledEdges;
+    std::shared_ptr<HighFive::File> nodeEmbeddingFile;
+    std::shared_ptr<void> nodeEmbeddingMem;
+    std::string nodeEmbeddingFileName;
+
     std::vector<std::vector<int>> tokenizedNodes;
     std::vector<std::vector<int>> tokenizedRelationships;
     std::vector<std::vector<int>> tokenizedEdgeAnnotations;
-    std::vector<std::string> rawRelationships;
+
+    // Each row is the distance to each landmark l0, l1, ..., ln
+    std::vector<std::vector<int>> landmarkDistances;
+
 public:
-    ConceptNetReader() = default;
-    explicit ConceptNetReader(const std::string &path);
+    KnowledgeBase() = default;
+    void clearDisabledEdges();
+    void disableEdgesOfRelationships(const std::vector<std::string> &relationships);
+    void disableEdgesOfNodes(const std::vector<std::string> &nodes);
+    std::vector<long> findNodes(const std::vector<std::string> &nodes) const;
     std::vector<Edge> getEdges(long source = -1, long target = -1) const;
     const std::vector<std::string> &getNodes() const;
     std::vector<std::string> getNodes(const std::vector<long> &nodeIndexes) const;
+    void setNodeEmbeddingFileName(const std::string &path, bool loadEmbeddingToMem = true);
+    bool isLandmarkInited() const;
+    void initLandmarks(int seedNum = 100, int landmarkNum = 100, int seed = -1, const std::string &landmarkPath = "");
+    int distance(long node1, long node2, bool fast = true) const;
+    void save(const std::string &archivePath) const;
+    void load(const std::string &archivePath, bool loadEmbeddingToMem = true);
+    void refresh(bool loadEmbeddingToMem);
+
+private:
+    struct PriorityCmp {
+        template <typename T1, typename T2>
+        bool operator()(const std::pair<T1, T2> &pair1, const std::pair<T1, T2> &pair2);
+    };
+
+private:
+    // For faster access
+    std::unordered_map<long, std::unordered_set<long>> adjacency;
+
+private:
+    void loadEmbedding(bool loadEmbeddingToMem);
+
+    void loadAdjacency();
+
+    bool isNeighbor(long node1, long node2) const;
+
+    std::vector<int> bfsDistances(long node) const;
+
+    int bfsDistance(long node1, long node2, int maxDepth = 3) const;
+
+    int landmarkDistance(long node1, long node2) const;
+
+    int landmarkLowerBound(long node, long targetNode) const;
+
+    int ALTDistance(long node1, long node2) const;
+
+    template <typename T>
+    static cista::raw::vector<T> vector2ArchiveVector(const std::vector<T> &vec);
+    template <typename T>
+    static std::vector<T> archiveVector2Vector(const cista::raw::vector<T> &vec);
 };
 
-
-class ConceptNetMatcher {
+class KnowledgeMatcher {
 public:
-    const ConceptNetReader *reader;
+    KnowledgeBase kb;
 public:
-    explicit ConceptNetMatcher(const ConceptNetReader &tokenizedReader);
-    explicit ConceptNetMatcher(const std::string &archivePath);
-    ~ConceptNetMatcher();
-    std::unordered_map<size_t, std::tuple<size_t, std::vector<std::vector<int>>>>
-    match(const std::vector<int> &sentence,
-          int maxTimes = 100, int maxDepth = 3, int maxEdges = 10, int seed = -1,
-          const std::vector<std::vector<int>> &similarityExclude = {},
-          const std::vector<std::vector<int>> &rankFocus = {},
-          const std::vector<std::vector<int>> &rankExclude = {}) const;
+    explicit KnowledgeMatcher(const KnowledgeBase &knowledgeBase);
+    explicit KnowledgeMatcher(const std::string &archivePath);
+    MatchResult
+    matchByNode(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
+                const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
+                int maxTimes = 100, int maxDepth = 3, int maxEdges = 10, int seed = -1,
+                float discardEdgesIfSimilarityBelow = 0,
+                float discardEdgesIfRankBelow = 0) const;
+    MatchResult
+    matchByNodeEmbedding(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
+                         const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
+                         int maxTimes = 100, int maxDepth = 3, int maxEdges = 10, int seed = -1,
+                         float discardEdgesIfSimilarityBelow = 0.5,
+                         float discardEdgesIfRankBelow = 0) const;
+    MatchResult
+    matchByToken(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
+                 const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
+                 int maxTimes = 100, int maxDepth = 3, int maxEdges = 10, int seed = -1,
+                 float discardEdgesIfSimilarityBelow = 0,
+                 float discardEdgesIfRankBelow = 0,
+                 const std::vector<std::vector<int>> &rankFocus = {},
+                 const std::vector<std::vector<int>> &rankExclude = {}) const;
     std::string getNodeTrie() const;
     std::vector<std::pair<std::vector<int>, long>> getNodeMap() const;
     void save(const std::string &archivePath) const;
-    void load(const std::string &archivePath);
+    void load(const std::string &archivePath, bool loadEmbeddingToMem = true);
 
 private:
     struct VectorHash {
@@ -94,12 +186,10 @@ private:
         std::size_t operator() (const std::pair<T1, T2> &pair) const;
     };
 
-    struct SerializableEdge {
-        long source;
-        long relation;
-        long target;
-        float weight;
-        cista::raw::string annotation;
+    struct UndirectedPairHash
+    {
+        template <class T1, class T2>
+        std::size_t operator() (const std::pair<T1, T2> &pair) const;
     };
 
     struct VisitedPath {
@@ -119,25 +209,25 @@ private:
         std::unordered_map<long, std::vector<size_t>> coveredSubGraph;
     };
 
-    struct ConceptNetArchive {
-        cista::raw::hash_map<long, cista::raw::vector<size_t>> edgeToTarget;
-        cista::raw::hash_map<long, cista::raw::vector<size_t>> edgeFromSource;
-        cista::raw::vector<SerializableEdge> edges;
-        cista::raw::vector<cista::raw::string> nodes;
-        cista::raw::vector<cista::raw::string> relationships;
-        cista::raw::vector<cista::raw::vector<int>> tokenizedNodes;
-        cista::raw::vector<cista::raw::vector<int>> tokenizedRelationships;
-        cista::raw::vector<cista::raw::vector<int>> tokenizedEdgeAnnotations;
-        cista::raw::vector<cista::raw::string> rawRelationships;
-    };
-
 private:
-    bool isLoad;
     Trie nodeTrie;
     std::unordered_map<std::vector<int>, long, VectorHash> nodeMap;
 
 private:
-    std::vector<int> edgeToAnnotation(const Edge &edge) const;
+    std::vector<int> edgeToAnnotation(size_t edgeIndex) const;
+
+    std::string edgeToStringAnnotation(size_t edgeIndex) const;
+
+    void matchForSourceAndTarget(const std::vector<int> &sourceSentence,
+                                 const std::vector<int> &targetSentence,
+                                 const std::vector<int> &sourceMask,
+                                 const std::vector<int> &targetMask,
+                                 std::unordered_map<size_t, std::vector<int>> &sourceMatch,
+                                 std::unordered_map<size_t, std::vector<int>> &targetMatch) const;
+
+    MatchResult selectPaths(VisitedSubGraph &visitedSubGraph,
+                            const std::unordered_map<long, std::pair<size_t, size_t>> &posRef,
+                            int maxEdges, float discardEdgesIfRankBelow) const;
 
     void updatePath(VisitedPath &path,
                     const std::unordered_set<std::pair<long, long>, PairHash> &coveredNodePairs,
@@ -149,10 +239,9 @@ private:
 
     static std::vector<int> filter(const std::vector<int> &sentence, const std::vector<std::vector<int>> &patterns);
 
+    static std::vector<int> mask(const std::vector<int> &sentence, const std::vector<int> &mask);
+
     static float similarity(const std::vector<int> &source, const std::vector<int> &target);
-    template <typename T>
-    static cista::raw::vector<T> vector2ArchiveVector(const std::vector<T> &vec);
-    template <typename T>
-    static std::vector<T> archiveVector2Vector(const cista::raw::vector<T> &vec);
+
 };
-#endif //MATCHER_SRC_MATCHER_H
+#endif //MATCHER_H

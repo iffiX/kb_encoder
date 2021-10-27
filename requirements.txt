@@ -9,6 +9,8 @@ docker==5.0.0
 kaggle==1.5.12
 pysocks==1.7.1
 h5py>=3.1.0
+cmake
+checksumdir
 scipy
 sklearn
-cppimport
+nltk
