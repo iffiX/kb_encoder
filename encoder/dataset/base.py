@@ -10,11 +10,18 @@ import traceback
 class StaticMapDataset(Dataset):
     def __init__(self, encodings: Union[Dict, BatchEncoding]):
         self.encodings = encodings
+        self.override_hook = None
+
+    def set_override_hook(self, override_hook):
+        self.override_hook = override_hook
 
     def __getitem__(self, idx: int):
-        return {
+        result = {
             key: t.tensor(val[idx]).unsqueeze(0) for key, val in self.encodings.items()
         }
+        if self.override_hook is not None:
+            result = self.override_hook(result)
+        return result
 
     def __len__(self):
         return len(self.encodings["input_ids"])
@@ -30,9 +37,16 @@ class StaticIterableDataset(Dataset):
         self.length = length
         self.generator = generator
         self.generator_args = generator_args
+        self.override_hook = None
+
+    def set_override_hook(self, override_hook):
+        self.override_hook = override_hook
 
     def __getitem__(self, idx: int):
-        return self.generator(idx, *self.generator_args)
+        result = self.generator(idx, *self.generator_args)
+        if self.override_hook is not None:
+            result = self.override_hook(result)
+        return result
 
     def __len__(self):
         return self.length

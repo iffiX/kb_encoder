@@ -4,9 +4,8 @@ import torch as t
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 from torch.distributed import all_gather_object, get_world_size, get_rank
-from transformers import AutoTokenizer, BatchEncoding
+from transformers import T5ForConditionalGeneration, T5TokenizerFast, BatchEncoding
 from pytorch_lightning.utilities import rank_zero_only
-from ..model.ext_vocab import ExtendVocabForSequenceClassification
 from ..dataset.base import collate_function_dict_to_batch_encoding
 from encoder.dataset.glue import GLUEDataset
 from ..utils.config import GLUETrainConfig
@@ -25,7 +24,7 @@ class GLUETrainer(pl.LightningModule):
         self.stage_result_path = stage_result_path
         self.is_distributed = is_distributed
 
-        self.glue_tokenizer = AutoTokenizer.from_pretrained(
+        self.tokenizer = T5TokenizerFast.from_pretrained(
             config.base_type,
             cache_dir=model_cache_dir,
             proxies=proxies,
@@ -46,12 +45,12 @@ class GLUETrainer(pl.LightningModule):
             max_test_samples=config.max_test_samples,
         )
 
-        self.glue_model = ExtendVocabForSequenceClassification(
-            base_type=config.base_type,
-            extend_config=config.extend_config,
-            extend_mode=config.extend_mode,
-            num_labels=self.dataset.num_labels,
-            **config.base_configs,
+        self.model = T5ForConditionalGeneration.from_pretrained(
+            config.base_type,
+            cache_dir=model_cache_dir,
+            proxies=proxies,
+            mirror=huggingface_mirror,
+            return_dict=True,
         )
 
     @property

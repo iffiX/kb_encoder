@@ -60,58 +60,6 @@ tuple<size_t, string> scan(const string &content, const vector<string> &delims, 
         return make_tuple(positions[minDelim] + start, delims[minDelim]);
 }
 
-inline float
-cosineSimilarityDataset(const HighFive::DataSet &embedding, long node1, long node2, size_t dim, bool simplifyWithInt8) {
-    if (simplifyWithInt8) {
-        xt::xtensor<int8_t, 1>::shape_type sh({dim});
-        xt::xtensor<int8_t, 1> tmp1(sh), tmp2(sh);
-        embedding.select({(size_t) node1, 0}, {1, dim}).read(tmp1.data());
-        auto srcEmbed = xt::cast<int16_t>(tmp1);
-        embedding.select({(size_t) node2, 0}, {1, dim}).read(tmp2.data());
-        auto tarEmbed = xt::cast<int16_t>(tmp2);
-        // cosine similarity
-        float dot = xt::sum<int16_t>(srcEmbed * tarEmbed)[0];
-        float norm1 = xt::sqrt(xt::cast<float>(xt::sum<int16_t>(srcEmbed * srcEmbed)))[0];
-        float norm2 = xt::sqrt(xt::cast<float>(xt::sum<int16_t>(tarEmbed * tarEmbed)))[0];
-        return dot / (norm1 * norm2);
-    } else {
-        xt::xtensor<float, 1>::shape_type sh({dim});
-        xt::xtensor<float, 1> srcEmbed(sh), tarEmbed(sh);
-        embedding.select({(size_t) node1, 0}, {1, dim}).read(srcEmbed.data());
-        embedding.select({(size_t) node2, 0}, {1, dim}).read(tarEmbed.data());
-        // cosine similarity
-        float dot = xt::sum<float>(srcEmbed * tarEmbed)[0];
-        float norm1 = xt::sqrt(xt::sum<float>(srcEmbed * srcEmbed))[0];
-        float norm2 = xt::sqrt(xt::sum<float>(tarEmbed * tarEmbed))[0];
-        return dot / (norm1 * norm2);
-    }
-}
-
-inline float
-cosineSimilarityMem(const shared_ptr<void> &embedding, long node1, long node2, size_t dim, bool simplifyWithInt8) {
-    if (simplifyWithInt8) {
-        const int8_t *emb = static_pointer_cast<int8_t[]>(embedding).get();
-        auto srcEmbed = xt::cast<int16_t>(xt::adapt(emb + node1 * dim, dim, xt::no_ownership(),
-                                                    vector<size_t>{dim}));
-        auto tarEmbed = xt::cast<int16_t>(xt::adapt(emb + node2 * dim, dim, xt::no_ownership(),
-                                                    vector<size_t>{dim}));
-        // cosine similarity
-        float dot = xt::sum<int16_t>(srcEmbed * tarEmbed)[0];
-        float norm1 = xt::sqrt(xt::cast<float>(xt::sum<int16_t>(srcEmbed * srcEmbed)))[0];
-        float norm2 = xt::sqrt(xt::cast<float>(xt::sum<int16_t>(tarEmbed * tarEmbed)))[0];
-        return dot / (norm1 * norm2);
-    } else {
-        float *emb = static_pointer_cast<float[]>(embedding).get();
-        auto srcEmbed = xt::adapt(emb + node1 * dim, dim, xt::no_ownership(), vector<size_t>{dim});
-        auto tarEmbed = xt::adapt(emb + node2 * dim, dim, xt::no_ownership(), vector<size_t>{dim});
-        // cosine similarity
-        float dot = xt::sum<float>(srcEmbed * tarEmbed)[0];
-        float norm1 = xt::sqrt(xt::sum<float>(srcEmbed * srcEmbed))[0];
-        float norm2 = xt::sqrt(xt::sum<float>(tarEmbed * tarEmbed))[0];
-        return dot / (norm1 * norm2);
-    }
-}
-
 TrieNode::TrieNode(int token, bool isWordEnd) : token(token), isWordEnd(isWordEnd) {}
 
 TrieNode::~TrieNode() {
@@ -251,11 +199,17 @@ vector<int> Trie::matchForStart(const vector<int> &sentence, size_t start) const
             if (currentNode->isWordEnd) {
                 // move temporary memory to result
                 result.insert(result.end(), tmp.begin(), tmp.end());
+#ifdef DEBUG
+                cout << fmt::format("Tmp matched [{}]", fmt::join(result.begin(), result.end(), ",")) << endl;
+#endif
                 tmp.clear();
             }
         } else
             break;
     }
+#ifdef DEBUG
+    cout << fmt::format("Matched result [{}]", fmt::join(result.begin(), result.end(), ",")) << endl;
+#endif
     return move(result);
 }
 
@@ -265,7 +219,7 @@ unordered_map<size_t, vector<int>> Trie::matchForAll(const vector<int> &sentence
         vector<int> match = move(matchForStart(sentence, i));
         if (not match.empty()) {
             size_t match_size = match.size();
-            result[i] = move(match);
+            result.emplace(i, match);
             i += match_size;
         } else
             i++;
@@ -391,6 +345,7 @@ void KnowledgeBase::initLandmarks(int seedNum, int landmarkNum, int seed, const 
         throw invalid_argument(fmt::format("Landmark num {} is too small, use at least 4", landmarkNum));
 
     string fileName;
+    cout << "[KB] Initializing landmark distances" << endl;
     if (landmarkPath.empty()) {
         // create a digestion of the graph, later to be used as the file name
         size_t nodeHash = nodes.size() + edges.size();
@@ -399,13 +354,13 @@ void KnowledgeBase::initLandmarks(int seedNum, int landmarkNum, int seed, const 
             nodeHash ^= hasher(n) + 0x9e3779b9 + (nodeHash << 6) + (nodeHash >> 2);
         }
         fileName = fmt::format("/tmp/{}-s{}-l{}.cache", nodeHash, seedNum, landmarkNum);
-        cout << fmt::format("Path not specified for landmark cache, use [{}] instead", fileName) << endl;
+        cout << fmt::format("[KB] Path not specified for landmark cache, use [{}] instead", fileName) << endl;
     } else
         fileName = landmarkPath;
     ifstream landmarkFile(fileName);
     landmarkDistances.clear();
     if (not landmarkFile.fail()) {
-        cout << "Loading landmark distances from file [" << fileName << "]" << endl;
+        cout << "[KB] Loading landmark distances from file [" << fileName << "]" << endl;
         landmarkFile.close();
         auto file = cista::file(fileName.c_str(), "r");
         auto content = file.content();
@@ -416,9 +371,10 @@ void KnowledgeBase::initLandmarks(int seedNum, int landmarkNum, int seed, const 
                 landmarkDistances[i][j] = (*ld)[j][i];
             }
         }
+        cout << "[KB] Landmark loaded" << endl;
     } else {
         // randomly choose seed nodes and perform bfs to find best landmarkDistances
-        cout << "Computing landmark distances with seedNum = "
+        cout << "[KB] Computing landmark distances with seedNum = "
              << seedNum << " landmarkNum = " << landmarkNum << endl;
         xt::xtensor<int, 2>::shape_type sh = {(size_t) seedNum, nodes.size()};
         xt::xtensor<int, 2> metricsRaw(sh);
@@ -465,7 +421,7 @@ void KnowledgeBase::initLandmarks(int seedNum, int landmarkNum, int seed, const 
 #pragma omp parallel for default(none) shared(landmarkNum, distances, nodes, topK, nodeNum, cout)
         for (int i = 0; i < landmarkNum; i++) {
 #ifdef DEBUG
-            cout << fmt::format("Select landmark [{}:{}]", nodes[long(topK[i])], long(topK[i])) << endl;
+            cout << fmt::format("[KB] Select landmark [{}:{}]", nodes[long(topK[i])], long(topK[i])) << endl;
 #endif
             distances[i] = move(bfsDistances(long(topK[i])));
         }
@@ -474,16 +430,15 @@ void KnowledgeBase::initLandmarks(int seedNum, int landmarkNum, int seed, const 
             for (size_t j = 0; j < distances.size(); j++) {
                 landmarkDistances[i][j] = distances[j][i];
             }
-//            cout << fmt::format("[{}]", fmt::join(landmarkDistances[i].begin(), landmarkDistances[i].end(), ","))
-//                 << endl;
         }
-        cout << "Saving landmark distance to file [" << fileName << "]" << endl;
+        cout << "[KB] Saving landmark distance to file [" << fileName << "]" << endl;
         auto file = cista::file(fileName.c_str(), "w");
         cista::raw::vector<cista::raw::vector<int>> ld;
         // save as transposed form to improve saving speed
         for (auto &ldd : distances)
             ld.push_back(vector2ArchiveVector(ldd));
         cista::serialize(file, ld);
+        cout << "[KB] Landmark saved" << endl;
     }
 }
 
@@ -501,8 +456,7 @@ int KnowledgeBase::distance(long node1, long node2, bool fast) const {
             return 1;
         else
             return (landmarkDistance(node1, node2) + landmarkLowerBound(node1, node2)) / 2 + 1;
-    }
-    else {
+    } else {
         if (isNeighbor(node1, node2))
             return 1;
         else {
@@ -516,10 +470,18 @@ int KnowledgeBase::distance(long node1, long node2, bool fast) const {
     }
 }
 
+float KnowledgeBase::cosineSimilarity(long node1, long node2) const {
+    if (nodeEmbeddingMem.get() != nullptr)
+        return cosineSimilarityFromMem(nodeEmbeddingMem, node1, node2, nodeEmbeddingDim, nodeEmbeddingSimplifyWithInt8);
+    else
+        return cosineSimilarityFromDataset(nodeEmbeddingDataset, node1, node2, nodeEmbeddingDim,
+                                           nodeEmbeddingSimplifyWithInt8);
+}
+
 void KnowledgeBase::save(const string &archivePath) const {
     KnowledgeArchive archive;
 
-    cout << "Begin saving" << endl;
+    cout << "[KB] Begin saving" << endl;
     for (auto &ett : edgeToTarget)
         archive.edgeToTarget.emplace(ett.first, vector2ArchiveVector(ett.second));
     for (auto &efs : edgeFromSource)
@@ -540,10 +502,10 @@ void KnowledgeBase::save(const string &archivePath) const {
     auto file = cista::file(archivePath.c_str(), "w");
     cista::serialize(file, archive);
 
-    cout << "Saved node num: " << nodes.size() << endl;
-    cout << "Saved edge num: " << edges.size() << endl;
-    cout << "Saved relation num: " << relationships.size() << endl;
-    cout << "Saved raw relation num: " << rawRelationships.size() << endl;
+    cout << "[KB] Saved node num: " << nodes.size() << endl;
+    cout << "[KB] Saved edge num: " << edges.size() << endl;
+    cout << "[KB] Saved relation num: " << relationships.size() << endl;
+    cout << "[KB] Saved raw relation num: " << rawRelationships.size() << endl;
 }
 
 void KnowledgeBase::load(const string &archivePath, bool loadEmbeddingToMem) {
@@ -557,8 +519,10 @@ void KnowledgeBase::load(const string &archivePath, bool loadEmbeddingToMem) {
     rawRelationships.clear();
     disabledEdges.clear();
     nodeEmbeddingFile = nullptr;
+    nodeEmbeddingDataset = nullptr;
+    nodeEmbeddingMem = nullptr;
 
-    cout << "Begin loading" << endl;
+    cout << "[KB] Begin loading" << endl;
     auto file = cista::file(archivePath.c_str(), "r");
     auto content = file.content();
     auto *archive = cista::deserialize<KnowledgeArchive>(content);
@@ -579,10 +543,11 @@ void KnowledgeBase::load(const string &archivePath, bool loadEmbeddingToMem) {
     rawRelationships.insert(rawRelationships.end(), archive->rawRelationships.begin(), archive->rawRelationships.end());
     nodeEmbeddingFileName = archive->nodeEmbeddingFileName;
     refresh(loadEmbeddingToMem);
-    cout << "Loaded node num: " << nodes.size() << endl;
-    cout << "Loaded edge num: " << edges.size() << endl;
-    cout << "Loaded relation num: " << relationships.size() << endl;
-    cout << "Loaded raw relation num: " << rawRelationships.size() << endl;
+    cout << "[KB] Loaded node num: " << nodes.size() << endl;
+    cout << "[KB] Loaded edge num: " << edges.size() << endl;
+    cout << "[KB] Loaded relation num: " << relationships.size() << endl;
+    cout << "[KB] Loaded raw relation num: " << rawRelationships.size() << endl;
+    cout << "[KB] Loading finished" << endl;
 }
 
 void KnowledgeBase::refresh(bool loadEmbeddingToMem) {
@@ -590,44 +555,46 @@ void KnowledgeBase::refresh(bool loadEmbeddingToMem) {
     loadAdjacency();
 }
 
-template <typename T1, typename T2>
+template<typename T1, typename T2>
 bool KnowledgeBase::PriorityCmp::operator()(const pair<T1, T2> &pair1, const pair<T1, T2> &pair2) {
     return pair1.first > pair2.first;
 }
 
 void KnowledgeBase::loadEmbedding(bool loadEmbeddingToMem) {
     nodeEmbeddingFile.reset();
+    nodeEmbeddingDataset.reset();
+    nodeEmbeddingMem.reset();
     if (not nodeEmbeddingFileName.empty()) {
         ifstream tmpFile(nodeEmbeddingFileName);
-        cout << "KB using embedding file [" << nodeEmbeddingFileName << "]" << endl;
+        cout << "[KB] Embedding configured, using embedding file [" << nodeEmbeddingFileName << "]" << endl;
         if (tmpFile.fail())
-            cout << "Failed to load embedding file [" << nodeEmbeddingFileName << "], skipped" << endl;
+            cout << "[KB] Failed to load embedding file [" << nodeEmbeddingFileName << "], skipped" << endl;
         else {
             tmpFile.close();
             nodeEmbeddingFile = make_shared<HighFive::File>(nodeEmbeddingFileName, HighFive::File::ReadOnly);
-            if (loadEmbeddingToMem) {
-                cout << "Loading embedding to memory" << endl;
-                auto dataset = nodeEmbeddingFile->getDataSet("embeddings");
-                auto shape = dataset.getDimensions();
-                auto dtype = dataset.getDataType();
-                if (shape.size() != 2)
-                    throw invalid_argument(
-                            fmt::format("Knowledge base embedding should be 2-dimensional, but got shape [{}]",
-                                        fmt::join(shape.begin(), shape.end(), ",")));
-                size_t dim = shape[1];
+            nodeEmbeddingDataset = make_shared<HighFive::DataSet>(nodeEmbeddingFile->getDataSet("embeddings"));
+            auto shape = nodeEmbeddingDataset->getDimensions();
+            auto dtype = nodeEmbeddingDataset->getDataType();
+            if (shape.size() != 2)
+                throw invalid_argument(
+                        fmt::format("Knowledge base embedding should be 2-dimensional, but got shape [{}]",
+                                    fmt::join(shape.begin(), shape.end(), ",")));
+            nodeEmbeddingDim = shape[1];
+            nodeEmbeddingSimplifyWithInt8 = dtype.getClass() == HighFive::DataTypeClass::Integer;
 
-                bool simplifyWithInt8 = dtype.getClass() == HighFive::DataTypeClass::Integer;
-                if (simplifyWithInt8) {
+            if (loadEmbeddingToMem) {
+                cout << "[KB] Loading embedding to memory" << endl;
+                if (nodeEmbeddingSimplifyWithInt8) {
                     nodeEmbeddingMem = shared_ptr<int8_t[]>(new int8_t[shape[0] * shape[1]]);
-                    dataset.read(static_pointer_cast<int8_t[]>(nodeEmbeddingMem).get());
+                    nodeEmbeddingDataset->read(static_pointer_cast<int8_t[]>(nodeEmbeddingMem).get());
                 } else {
                     nodeEmbeddingMem = shared_ptr<float[]>(new float[shape[0] * shape[1]]);
-                    dataset.read(static_pointer_cast<float[]>(nodeEmbeddingMem).get());
+                    nodeEmbeddingDataset->read(static_pointer_cast<float[]>(nodeEmbeddingMem).get());
                 }
             }
         }
     } else {
-        cout << "KB does not have an embedding file, skipped" << endl;
+        cout << "[KB] Embedding not configured, skipped" << endl;
     }
 }
 
@@ -770,6 +737,61 @@ int KnowledgeBase::ALTDistance(long node1, long node2) const {
     throw runtime_error("Failed to perform A*, this shouldn't happen.");
 }
 
+inline float
+KnowledgeBase::cosineSimilarityFromDataset(const shared_ptr<HighFive::DataSet> &embedding, long node1, long node2,
+                                           size_t dim,
+                                           bool simplifyWithInt8) {
+    if (simplifyWithInt8) {
+        xt::xtensor<int8_t, 1>::shape_type sh({dim});
+        xt::xtensor<int8_t, 1> tmp1(sh), tmp2(sh);
+        embedding->select({(size_t) node1, 0}, {1, dim}).read(tmp1.data());
+        auto srcEmbed = xt::cast<int16_t>(tmp1);
+        embedding->select({(size_t) node2, 0}, {1, dim}).read(tmp2.data());
+        auto tarEmbed = xt::cast<int16_t>(tmp2);
+        // cosine similarity
+        float dot = xt::sum<int16_t>(srcEmbed * tarEmbed)[0];
+        float norm1 = xt::sqrt(xt::cast<float>(xt::sum<int16_t>(srcEmbed * srcEmbed)))[0];
+        float norm2 = xt::sqrt(xt::cast<float>(xt::sum<int16_t>(tarEmbed * tarEmbed)))[0];
+        return dot / (norm1 * norm2);
+    } else {
+        xt::xtensor<float, 1>::shape_type sh({dim});
+        xt::xtensor<float, 1> srcEmbed(sh), tarEmbed(sh);
+        embedding->select({(size_t) node1, 0}, {1, dim}).read(srcEmbed.data());
+        embedding->select({(size_t) node2, 0}, {1, dim}).read(tarEmbed.data());
+        // cosine similarity
+        float dot = xt::sum<float>(srcEmbed * tarEmbed)[0];
+        float norm1 = xt::sqrt(xt::sum<float>(srcEmbed * srcEmbed))[0];
+        float norm2 = xt::sqrt(xt::sum<float>(tarEmbed * tarEmbed))[0];
+        return dot / (norm1 * norm2);
+    }
+}
+
+inline float
+KnowledgeBase::cosineSimilarityFromMem(const shared_ptr<void> &embedding, long node1, long node2, size_t dim,
+                                       bool simplifyWithInt8) {
+    if (simplifyWithInt8) {
+        const int8_t *emb = static_pointer_cast<int8_t[]>(embedding).get();
+        auto srcEmbed = xt::cast<int16_t>(xt::adapt(emb + node1 * dim, dim, xt::no_ownership(),
+                                                    vector<size_t>{dim}));
+        auto tarEmbed = xt::cast<int16_t>(xt::adapt(emb + node2 * dim, dim, xt::no_ownership(),
+                                                    vector<size_t>{dim}));
+        // cosine similarity
+        float dot = xt::sum<int16_t>(srcEmbed * tarEmbed)[0];
+        float norm1 = xt::sqrt(xt::cast<float>(xt::sum<int16_t>(srcEmbed * srcEmbed)))[0];
+        float norm2 = xt::sqrt(xt::cast<float>(xt::sum<int16_t>(tarEmbed * tarEmbed)))[0];
+        return dot / (norm1 * norm2);
+    } else {
+        float *emb = static_pointer_cast<float[]>(embedding).get();
+        auto srcEmbed = xt::adapt(emb + node1 * dim, dim, xt::no_ownership(), vector<size_t>{dim});
+        auto tarEmbed = xt::adapt(emb + node2 * dim, dim, xt::no_ownership(), vector<size_t>{dim});
+        // cosine similarity
+        float dot = xt::sum<float>(srcEmbed * tarEmbed)[0];
+        float norm1 = xt::sqrt(xt::sum<float>(srcEmbed * srcEmbed))[0];
+        float norm2 = xt::sqrt(xt::sum<float>(tarEmbed * tarEmbed))[0];
+        return dot / (norm1 * norm2);
+    }
+}
+
 template<typename T>
 cista::raw::vector<T> KnowledgeBase::vector2ArchiveVector(const vector<T> &vec) {
     return move(cista::raw::vector<T>(vec.begin(), vec.end()));
@@ -781,19 +803,19 @@ vector<T> KnowledgeBase::archiveVector2Vector(const cista::raw::vector<T> &vec) 
 }
 
 KnowledgeMatcher::KnowledgeMatcher(const KnowledgeBase &knowledgeBase) {
-    cout << "Initializing matcher from knowledge base" << endl;
+    cout << "[KM] Initializing matcher from knowledge base" << endl;
     kb = knowledgeBase;
     for (long index = 0; index < knowledgeBase.tokenizedNodes.size(); index++) {
         nodeTrie.insert(knowledgeBase.tokenizedNodes[index]);
         nodeMap[knowledgeBase.tokenizedNodes[index]] = index;
     }
-    cout << "Matcher initialized" << endl;
+    cout << "[KM] Matcher initialized" << endl;
 }
 
 KnowledgeMatcher::KnowledgeMatcher(const string &archivePath) {
-    cout << "Initializing matcher from knowledge base archive" << endl;
+    cout << "[KM] Initializing matcher from knowledge base archive" << endl;
     load(archivePath);
-    cout << "Matcher initialized" << endl;
+    cout << "[KM] Matcher initialized" << endl;
 }
 
 MatchResult
@@ -804,6 +826,27 @@ KnowledgeMatcher::matchByNode(const vector<int> &sourceSentence,
                               int maxTimes, int maxDepth, int maxEdges, int seed,
                               float discardEdgesIfSimilarityBelow,
                               float discardEdgesIfRankBelow) const {
+
+#ifdef DEBUG
+    cout << "================================================================================" << endl;
+    cout << "Method: match by node" << endl;
+    cout << fmt::format("sourceSentence: [{}]",
+                        fmt::join(sourceSentence.begin(), sourceSentence.end(), ",")) << endl;
+    cout << fmt::format("targetSentence: [{}]",
+                        fmt::join(targetSentence.begin(), targetSentence.end(), ",")) << endl;
+    cout << fmt::format("sourceMask: [{}]",
+                        fmt::join(sourceMask.begin(), sourceMask.end(), ",")) << endl;
+    cout << fmt::format("targetMask: [{}]",
+                        fmt::join(targetMask.begin(), targetMask.end(), ",")) << endl;
+    cout << "maxTimes: " << maxTimes << endl;
+    cout << "maxDepth: " << maxDepth << endl;
+    cout << "maxEdges: " << maxEdges << endl;
+    cout << "seed: " << seed << endl;
+    cout << "discardEdgesIfSimilarityBelow: " << discardEdgesIfSimilarityBelow << endl;
+    cout << "discardEdgesIfRankBelow: " << discardEdgesIfRankBelow << endl;
+    cout << "================================================================================" << endl;
+#endif
+
     unordered_map<size_t, vector<int>> sourceMatch, targetMatch;
     matchForSourceAndTarget(sourceSentence,
                             targetSentence,
@@ -811,6 +854,19 @@ KnowledgeMatcher::matchByNode(const vector<int> &sourceSentence,
                             targetMask,
                             sourceMatch,
                             targetMatch);
+
+    if (sourceMatch.empty()) {
+#ifdef DEBUG
+        cout << "Source match result is empty, return" << endl;
+#endif
+        return move(MatchResult());
+    }
+    if (targetMatch.empty()) {
+#ifdef DEBUG
+        cout << "Target match result is empty, return" << endl;
+#endif
+        return move(MatchResult());
+    }
 
     // first: matched node id, match start position in sentence, match end position in sentence
     // also only store the first posision reference if there are multiple occurrences to prevent duplicate knowledge.
@@ -872,7 +928,7 @@ KnowledgeMatcher::matchByNode(const vector<int> &sourceSentence,
         path.root = rootNode;
         path.matchedFocusCount = 0;
         path.visitedNodes.insert(currentNode);
-#ifdef DEBUG
+#ifdef DEBUG_DECISION
         cout << fmt::format("Round {}", i) << endl;
         cout << "Compare target:" << endl;
         for (auto &tNode : targetNodes)
@@ -887,7 +943,7 @@ KnowledgeMatcher::matchByNode(const vector<int> &sourceSentence,
             size_t inSize = hasIn ? kb.edgeToTarget.at(currentNode).size() : 0;
             sim.resize(outSize + inSize, 0);
 
-#ifdef DEBUG
+#ifdef DEBUG_DECISION
             cout << fmt::format("Current node: [{}:{}]", kb.nodes[currentNode], currentNode) << endl;
 #endif
             for (size_t j = 0; j < outSize + inSize; j++) {
@@ -916,7 +972,7 @@ KnowledgeMatcher::matchByNode(const vector<int> &sourceSentence,
                         simTmp = 0;
                     sim[j] = simTmp;
                 }
-#ifdef DEBUG
+#ifdef DEBUG_DECISION
                 cout << fmt::format("{}: [{}:{}] --[{}:{}]--> [{}:{}], annotation [{}], similarity {}",
                                     edgeIndex,
                                     kb.nodes[get<0>(edge)], get<0>(edge),
@@ -949,14 +1005,14 @@ KnowledgeMatcher::matchByNode(const vector<int> &sourceSentence,
             vector<int> compareSource;
             compareSource = edgeToAnnotation(selectedEdgeIndex);
 
-#ifdef DEBUG
+#ifdef DEBUG_DECISION
             cout << endl;
             cout << "Choose edge " << selectedEdgeIndex << endl;
             cout << "Annotation: " << edgeToStringAnnotation(selectedEdgeIndex) << endl;
             cout << "--------------------------------------------------------------------------------" << endl;
 #endif
         }
-#ifdef DEBUG
+#ifdef DEBUG_DECISION
         cout << "================================================================================" << endl;
 #endif
         visitedSubGraph.visitedPaths.push_back(path);
@@ -977,17 +1033,25 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
     if (kb.nodeEmbeddingFileName.empty() or kb.nodeEmbeddingFile == nullptr)
         throw invalid_argument("Knowledge base doesn't have an embedding file.");
 
-    auto tmpDataset = kb.nodeEmbeddingFile->getDataSet("embeddings");
-    auto shape = tmpDataset.getDimensions();
-    auto dtype = tmpDataset.getDataType();
-    size_t dim = shape[1];
-    bool simplifyWithInt8 = dtype.getClass() == HighFive::DataTypeClass::Integer;
-
-    HighFive::DataSetAccessProps props;
-    props.add(HighFive::Caching(8192, 1024 * 1024 * 1024));
-    auto embedding = kb.nodeEmbeddingFile->getDataSet("embeddings", props);
-    auto embeddingMem = kb.nodeEmbeddingMem;
-
+#ifdef DEBUG
+    cout << "================================================================================" << endl;
+    cout << "Method: match by node embedding" << endl;
+    cout << fmt::format("sourceSentence: [{}]",
+                        fmt::join(sourceSentence.begin(), sourceSentence.end(), ",")) << endl;
+    cout << fmt::format("targetSentence: [{}]",
+                        fmt::join(targetSentence.begin(), targetSentence.end(), ",")) << endl;
+    cout << fmt::format("sourceMask: [{}]",
+                        fmt::join(sourceMask.begin(), sourceMask.end(), ",")) << endl;
+    cout << fmt::format("targetMask: [{}]",
+                        fmt::join(targetMask.begin(), targetMask.end(), ",")) << endl;
+    cout << "maxTimes: " << maxTimes << endl;
+    cout << "maxDepth: " << maxDepth << endl;
+    cout << "maxEdges: " << maxEdges << endl;
+    cout << "seed: " << seed << endl;
+    cout << "discardEdgesIfSimilarityBelow: " << discardEdgesIfSimilarityBelow << endl;
+    cout << "discardEdgesIfRankBelow: " << discardEdgesIfRankBelow << endl;
+    cout << "================================================================================" << endl;
+#endif
     unordered_map<size_t, vector<int>> sourceMatch, targetMatch;
     matchForSourceAndTarget(sourceSentence,
                             targetSentence,
@@ -995,6 +1059,19 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
                             targetMask,
                             sourceMatch,
                             targetMatch);
+
+    if (sourceMatch.empty()) {
+#ifdef DEBUG
+        cout << "Source match result is empty, return" << endl;
+#endif
+        return move(MatchResult());
+    }
+    if (targetMatch.empty()) {
+#ifdef DEBUG
+        cout << "Target match result is empty, return" << endl;
+#endif
+        return move(MatchResult());
+    }
 
     // first: matched node id, match start position in sentence, match end position in sentence
     // also only store the first posision reference if there are multiple occurrences to prevent duplicate knowledge.
@@ -1037,9 +1114,8 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
 
 #pragma omp parallel for reduction(vsg_join : visitedSubGraph) \
     default(none) \
-    shared(nodes, sourceMatch, targetNodes, posRef, cout, discardEdgesIfSimilarityBelow, \
-           simplifyWithInt8, embedding, embeddingMem) \
-    firstprivate(seed, maxTimes, maxDepth, dim, similarityCache)
+    shared(nodes, sourceMatch, targetNodes, posRef, cout, discardEdgesIfSimilarityBelow) \
+    firstprivate(seed, maxTimes, maxDepth, similarityCache)
 
     for (int i = 0; i < maxTimes; i++) {
         mt19937 gen(seed ^ i);
@@ -1057,7 +1133,7 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
         path.root = rootNode;
         path.matchedFocusCount = 0;
         path.visitedNodes.insert(currentNode);
-#ifdef DEBUG
+#ifdef DEBUG_DECISION
         cout << fmt::format("Round {}", i) << endl;
         cout << "Compare target:" << endl;
         for (auto &tNode : targetNodes)
@@ -1072,7 +1148,7 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
             size_t inSize = hasIn ? kb.edgeToTarget.at(currentNode).size() : 0;
             sim.resize(outSize + inSize, 0);
 
-#ifdef DEBUG
+#ifdef DEBUG_DECISION
             cout << fmt::format("Current node: [{}:{}]", kb.nodes[currentNode], currentNode) << endl;
 #endif
             for (size_t j = 0; j < outSize + inSize; j++) {
@@ -1091,12 +1167,7 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
                     for (auto &tNode : targetNodes) {
                         auto simPair = make_pair(tNode.first, otherNodeId);
                         if (similarityCache.find(simPair) == similarityCache.end()) {
-                            if (embeddingMem != nullptr)
-                                simToEachTarget = cosineSimilarityMem(embeddingMem, tNode.first, otherNodeId, dim,
-                                                                      simplifyWithInt8);
-                            else
-                                simToEachTarget = cosineSimilarityDataset(embedding, tNode.first, otherNodeId, dim,
-                                                                          simplifyWithInt8);
+                            simToEachTarget = kb.cosineSimilarity(otherNodeId, tNode.first);
                             similarityCache[simPair] = simToEachTarget;
                             simTmp = max(simTmp, simToEachTarget);
                         } else {
@@ -1107,7 +1178,7 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
                         simTmp = 0;
                     sim[j] = simTmp;
                 }
-#ifdef DEBUG
+#ifdef DEBUG_DECISION
                 cout << fmt::format("{}: [{}:{}] --[{}:{}]--> [{}:{}], annotation [{}], similarity {}",
                                     edgeIndex,
                                     kb.nodes[get<0>(edge)], get<0>(edge),
@@ -1140,14 +1211,15 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
             vector<int> compareSource;
             compareSource = edgeToAnnotation(selectedEdgeIndex);
 
-#ifdef DEBUG
+
+#ifdef DEBUG_DECISION
             cout << endl;
             cout << "Choose edge " << selectedEdgeIndex << endl;
             cout << "Annotation: " << edgeToStringAnnotation(selectedEdgeIndex) << endl;
             cout << "--------------------------------------------------------------------------------" << endl;
 #endif
         }
-#ifdef DEBUG
+#ifdef DEBUG_DECISION
         cout << "================================================================================" << endl;
 #endif
         visitedSubGraph.visitedPaths.push_back(path);
@@ -1167,7 +1239,35 @@ KnowledgeMatcher::matchByToken(const vector<int> &sourceSentence,
                                float discardEdgesIfRankBelow,
                                const vector<vector<int>> &rankFocus,
                                const vector<vector<int>> &rankExclude) const {
+#ifdef DEBUG
+    cout << "================================================================================" << endl;
+    cout << "Method: match by token" << endl;
+    cout << fmt::format("sourceSentence: [{}]",
+                        fmt::join(sourceSentence.begin(), sourceSentence.end(), ",")) << endl;
+    cout << fmt::format("targetSentence: [{}]",
+                        fmt::join(targetSentence.begin(), targetSentence.end(), ",")) << endl;
+    cout << fmt::format("sourceMask: [{}]",
+                        fmt::join(sourceMask.begin(), sourceMask.end(), ",")) << endl;
+    cout << fmt::format("targetMask: [{}]",
+                        fmt::join(targetMask.begin(), targetMask.end(), ",")) << endl;
+    cout << "maxTimes: " << maxTimes << endl;
+    cout << "maxDepth: " << maxDepth << endl;
+    cout << "maxEdges: " << maxEdges << endl;
+    cout << "seed: " << seed << endl;
+    cout << "discardEdgesIfSimilarityBelow: " << discardEdgesIfSimilarityBelow << endl;
+    cout << "discardEdgesIfRankBelow: " << discardEdgesIfRankBelow << endl;
+    cout << "rankFocus:" << endl;
+    for(auto &item : rankFocus)
+        cout << fmt::format("[{}]",
+                            fmt::join(item.begin(), item.end(), ",")) << endl;
+    cout << "rankExclude:" << endl;
+    for(auto &item : rankExclude)
+        cout << fmt::format("[{}]",
+                            fmt::join(item.begin(), item.end(), ",")) << endl;
+    cout << "================================================================================" << endl;
+#endif
 
+    // target match is not used here
     unordered_map<size_t, vector<int>> sourceMatch, _targetMatch;
 
     // When matching by token, we don't find nodes for the target Sentence
@@ -1177,6 +1277,14 @@ KnowledgeMatcher::matchByToken(const vector<int> &sourceSentence,
                             sourceMask,
                             sourceMatch,
                             _targetMatch);
+
+    if (sourceMatch.empty()) {
+#ifdef DEBUG
+        cout << "Source match result is empty, return" << endl;
+#endif
+        return move(MatchResult());
+    }
+
 
     // first: matched node id, match start position in sentence, match end position in sentence
     // also only store the first posision reference if there are multiple occurrences to prevent duplicate knowledge.
@@ -1242,7 +1350,7 @@ KnowledgeMatcher::matchByToken(const vector<int> &sourceSentence,
         path.root = rootNode;
         path.matchedFocusCount = 0;
         path.visitedNodes.insert(currentNode);
-#ifdef DEBUG
+#ifdef DEBUG_DECISION
         cout << fmt::format("Round {}", i) << endl;
         cout << fmt::format("Compare target: [{}]", fmt::join(compareTarget, ", ")) << endl;
         cout << "================================================================================" << endl;
@@ -1255,7 +1363,7 @@ KnowledgeMatcher::matchByToken(const vector<int> &sourceSentence,
             size_t inSize = hasIn ? kb.edgeToTarget.at(currentNode).size() : 0;
             sim.resize(outSize + inSize, 0);
 
-#ifdef DEBUG
+#ifdef DEBUG_DECISION
             cout << fmt::format("Current node: [{}:{}]", kb.nodes[currentNode], currentNode) << endl;
 #endif
             for (size_t j = 0; j < outSize + inSize; j++) {
@@ -1275,7 +1383,7 @@ KnowledgeMatcher::matchByToken(const vector<int> &sourceSentence,
                         simTmp = 0;
                     sim[j] = simTmp;
                 }
-#ifdef DEBUG
+#ifdef DEBUG_DECISION
                 cout << fmt::format("{}: [{}:{}] --[{}:{}]--> [{}:{}], annotation [{}], similarity {}, cmp_src [{}]",
                                     edgeIndex,
                                     kb.nodes[get<0>(edge)], get<0>(edge),
@@ -1311,14 +1419,14 @@ KnowledgeMatcher::matchByToken(const vector<int> &sourceSentence,
             path.matchedFocusCount += findPattern(compareSource, rankFocus);
             path.matchedFocusCount -= findPattern(compareSource, rankExclude);
 
-#ifdef DEBUG
+#ifdef DEBUG_DECISION
             cout << endl;
             cout << "Choose edge " << selectedEdgeIndex << endl;
             cout << "Annotation: " << edgeToStringAnnotation(selectedEdgeIndex) << endl;
             cout << "--------------------------------------------------------------------------------" << endl;
 #endif
         }
-#ifdef DEBUG
+#ifdef DEBUG_DECISION
         cout << "================================================================================" << endl;
 #endif
         visitedSubGraph.visitedPaths.push_back(path);
@@ -1423,52 +1531,78 @@ void KnowledgeMatcher::matchForSourceAndTarget(const vector<int> &sourceSentence
                                                const vector<int> &targetMask,
                                                unordered_map<size_t, vector<int>> &sourceMatch,
                                                unordered_map<size_t, vector<int>> &targetMatch) const {
-    sourceMatch = nodeTrie.matchForAll(sourceSentence);
-    if (not sourceMask.empty()) {
-        if (sourceMask.size() != sourceSentence.size())
-            throw invalid_argument(fmt::format(
-                    "Mask is provided for source sentence but size does not match, sentence: {}, mask: {}",
-                    sourceSentence.size(), sourceMask.size()));
-        for (auto iter = sourceMatch.begin(); iter != sourceMatch.end();) {
-            // Check if the posision is masked
-            if (sourceMask[iter->first] == 0) {
+    if (not sourceMask.empty() && sourceMask.size() != sourceSentence.size())
+        throw invalid_argument(fmt::format(
+                "Mask is provided for source sentence but size does not match, sentence: {}, mask: {}",
+                sourceSentence.size(), sourceMask.size()));
+
+    if (not targetMask.empty() && targetMask.size() != targetSentence.size())
+        throw invalid_argument(fmt::format(
+                "Mask is provided for target sentence but size does not match, sentence: {}, mask: {}",
+                targetSentence.size(), targetMask.size()));
+
 #ifdef DEBUG
-                cout << fmt::format("Removing match [{}]@{} in source sentence",
-                                    fmt::join(iter->second.begin(), iter->second.end(), ","), iter->first) << endl;
+    cout << "Begin node matching for source and target sentence" << endl;
 #endif
-                iter = sourceMatch.erase(iter);
-            } else
-                iter++;
-        }
+//    sourceMatch = nodeTrie.matchForAll(sourceSentence);
+//    if (not sourceMask.empty()) {
+//        for (auto iter = sourceMatch.begin(); iter != sourceMatch.end();) {
+//            // Check if the posision is masked
+//            if (sourceMask[iter->first] == 0) {
+//#ifdef DEBUG
+//                cout << fmt::format("Removing match [{}]@{} in source sentence",
+//                                    fmt::join(iter->second.begin(), iter->second.end(), ","), iter->first) << endl;
+//#endif
+//                iter = sourceMatch.erase(iter);
+//            } else
+//                iter++;
+//        }
+//    }
+//    if (targetSentence.empty())
+//        targetMatch = sourceMatch;
+//    else {
+//        targetMatch = nodeTrie.matchForAll(targetSentence);
+//        if (not targetMask.empty()) {
+//            for (auto iter = targetMatch.begin(); iter != targetMatch.end();) {
+//                // Check if the posision is masked
+//                if (targetMask[iter->first] == 0) {
+//#ifdef DEBUG
+//                    cout << fmt::format("Removing match [{}]@{} in target sentence",
+//                                        fmt::join(iter->second.begin(), iter->second.end(), ","), iter->first) << endl;
+//#endif
+//                    iter = targetMatch.erase(iter);
+//                } else
+//                    iter++;
+//            }
+//        }
+//    }
+    vector<int> sourceSentenceMasked = sourceSentence;
+    for (size_t i = 0; i < sourceMask.size(); i++) {
+        sourceSentenceMasked[i] = sourceMask[i] == 0 ? -1 : sourceSentenceMasked[i];
     }
+    sourceMatch = nodeTrie.matchForAll(sourceSentenceMasked);
     if (targetSentence.empty())
         targetMatch = sourceMatch;
     else {
-        targetMatch = move(nodeTrie.matchForAll(targetSentence));
-        if (not targetMask.empty()) {
-            if (targetMask.size() != targetSentence.size())
-                throw invalid_argument(fmt::format(
-                        "Mask is provided for target sentence but size does not match, sentence: {}, mask: {}",
-                        targetSentence.size(), targetMask.size()));
-            for (auto iter = targetMatch.begin(); iter != targetMatch.end();) {
-                // Check if the posision is masked
-                if (targetMask[iter->first] == 0) {
-#ifdef DEBUG
-                    cout << fmt::format("Removing match [{}]@{} in target sentence",
-                                        fmt::join(iter->second.begin(), iter->second.end(), ","), iter->first) << endl;
-#endif
-                    iter = targetMatch.erase(iter);
-                } else
-                    iter++;
-            }
+        vector<int> targetSentenceMasked = targetSentence;
+        for (size_t i = 0; i < targetMask.size(); i++) {
+            targetSentenceMasked[i] = targetMask[i] == 0 ? -1 : targetSentenceMasked[i];
         }
+        targetMatch = move(nodeTrie.matchForAll(targetSentenceMasked));
     }
+#ifdef DEBUG
+    cout << "Finish node matching for source and target sentence" << endl;
+#endif
+
 }
 
 MatchResult
 KnowledgeMatcher::selectPaths(VisitedSubGraph &visitedSubGraph,
                               const unordered_map<long, pair<size_t, size_t>> &posRef,
                               int maxEdges, float discardEdgesIfRankBelow) const {
+#ifdef DEBUG
+    cout << "Begin selecting paths" << endl;
+#endif
     const float similarityFocusMultiplier = 3;
 
     // set cover problem, use greedy algorithm to achieve 1-1/e approximation
@@ -1502,7 +1636,7 @@ KnowledgeMatcher::selectPaths(VisitedSubGraph &visitedSubGraph,
         }
         remainingEdges -= int(addEdges.size());
 
-#ifdef DEBUG
+#ifdef DEBUG_DECISION
         cout << endl << "Rank result:" << endl;
         cout << "********************************************************************************" << endl;
         cout << "Root at position: " << posRef.at(path.root).first << " Root: " << kb.nodes[path.root] << endl;
@@ -1539,6 +1673,9 @@ KnowledgeMatcher::selectPaths(VisitedSubGraph &visitedSubGraph,
             get<1>(result[endPos]).emplace_back(edgeToAnnotation(edgeIndex));
         }
     }
+#ifdef DEBUG
+    cout << "Finish selecting paths" << endl;
+#endif
     return move(result);
 }
 
@@ -1639,6 +1776,6 @@ float KnowledgeMatcher::similarity(const vector<int> &source, const vector<int> 
             overlapCount++;
     }
     return overlapCount;
-    //return float(overlapCount) / float(source.size());
+    //return float(overlapCount) / (float(source.size()) + 1);
     //return lcs(source, target);
 }

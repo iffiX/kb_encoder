@@ -2,7 +2,7 @@ import os
 import logging
 import pickle
 import torch as t
-from .base import QADataset, StaticMapDataset
+from .base import StaticMapDataset
 from typing import List, Dict, Any
 from transformers import PreTrainedTokenizerBase, BatchEncoding
 from datasets import load_dataset, load_metric, DownloadConfig
@@ -15,7 +15,7 @@ from encoder.utils.settings import (
 )
 
 
-class SQuADDataset(QADataset):
+class SQuADDataset:
     def __init__(
         self, tokenizer: PreTrainedTokenizerBase, dataset_path: str = "squad",
     ):

@@ -10,7 +10,6 @@ import importlib.util
 from checksumdir import dirhash
 from typing import List, Dict, Tuple, Union
 
-from statsmodels.sandbox.stats.runs import Runs
 from transformers import PreTrainedTokenizerBase
 from encoder.utils.settings import dataset_cache_dir, preprocess_cache_dir
 from encoder.utils.file import download_to, decompress_gz
@@ -35,7 +34,7 @@ if os.path.exists(os.path.join(_build_path, "hash.txt")):
     with open(os.path.join(_build_path, "hash.txt"), "r") as file:
         build = file.read() != md5hash
 if build:
-    shutil.rmtree(_build_path)
+    shutil.rmtree(_build_path, ignore_errors=True)
     os.makedirs(_build_path)
     subprocess.call(
         [
@@ -78,8 +77,6 @@ class ConceptNetMatcher:
         nltk.download("punkt")
         nltk.download("averaged_perceptron_tagger")
 
-        dataset_cache_dir = preprocess_cache_dir = "/data"
-
         assertion_path = str(
             os.path.join(dataset_cache_dir, "conceptnet-assertions.csv")
         )
@@ -91,9 +88,6 @@ class ConceptNetMatcher:
         )
         embedding_path = str(
             os.path.join(preprocess_cache_dir, "conceptnet-embedding.hdf5")
-        )
-        landmark_path = str(
-            os.path.join(preprocess_cache_dir, "conceptnet-landmark.cache")
         )
 
         for task, data_path, url in (
@@ -135,14 +129,67 @@ class ConceptNetMatcher:
         else:
             self.net_matcher = matcher.KnowledgeMatcher(archive_path)
 
-        self.net_matcher.kb.init_landmarks(
-            seed_num=100, landmark_num=100, seed=41379823, landmark_path=landmark_path
+        # Disable relations of similar word forms
+        self.net_matcher.kb.disable_edges_of_relationships(
+            [
+                "DerivedFrom",
+                "EtymologicallyDerivedFrom",
+                "EtymologicallyRelatedTo",
+                "FormOf",
+            ]
         )
+
+    def match(
+        self,
+        source_sentence: str,
+        target_sentence: str = "",
+        source_mask: str = "",
+        target_mask: str = "",
+        seed: int = -1,
+    ):
+        result_1 = self.match_by_node_embedding(
+            source_sentence,
+            target_sentence=target_sentence,
+            source_mask=source_mask,
+            target_mask=target_mask,
+            max_times=300,
+            max_depth=3,
+            max_edges=30,
+            discard_edges_if_similarity_below=0.4,
+            discard_edges_if_rank_below=0,
+            seed=seed,
+        )
+        result_2 = self.match_by_token(
+            source_sentence,
+            target_sentence=target_sentence,
+            source_mask=source_mask,
+            target_mask=target_mask,
+            max_times=300,
+            max_depth=3,
+            max_edges=30,
+            seed=seed,
+        )
+        set_1 = {(k, v[0]): {tuple(vv) for vv in v[1]} for k, v in result_1.items()}
+        set_2 = {(k, v[0]): {tuple(vv) for vv in v[1]} for k, v in result_2.items()}
+        final_set = {}
+        # print("Result of match by embedding")
+        # print(self.insert_match(source_sentence, result_1))
+        # print("")
+        # print("Result of match by token:")
+        # print(self.insert_match(source_sentence, result_2))
+        # print("")
+        for match_pos, triples in set_1.items():
+            if match_pos in set_2:
+                final_triples = triples.intersection(set_2[match_pos])
+                final_set[match_pos] = final_triples
+        return {mp[0]: (mp[1], list(triples)) for mp, triples in final_set.items()}
 
     def match_by_node(
         self,
         source_sentence: str,
         target_sentence: str = "",
+        source_mask: str = "",
+        target_mask: str = "",
         max_times: int = 1000,
         max_depth: int = 3,
         max_edges: int = 3,
@@ -156,17 +203,32 @@ class ConceptNetMatcher:
             end position is the index of the word behind the match
             start position is the index of the first word in the match
         """
-        source_tokens, source_mask = self.tokenize_and_mask(source_sentence)
+        if not self.net_matcher.kb.is_landmark_inited():
+            landmark_path = str(
+                os.path.join(preprocess_cache_dir, "conceptnet-landmark.cache")
+            )
+            self.net_matcher.kb.init_landmarks(
+                seed_num=100,
+                landmark_num=100,
+                seed=41379823,
+                landmark_path=landmark_path,
+            )
+
+        source_tokens, _source_mask = self.tokenize_and_mask(
+            source_sentence, source_mask
+        )
         if len(target_sentence) == 0:
-            target_tokens, target_mask = source_tokens, source_mask
+            target_tokens, _target_mask = source_tokens, _source_mask
         else:
-            target_tokens, target_mask = self.tokenize_and_mask(target_sentence)
+            target_tokens, _target_mask = self.tokenize_and_mask(
+                target_sentence, target_mask
+            )
 
         result = self.net_matcher.match_by_node(
             source_sentence=source_tokens,
             target_sentence=target_tokens,
-            source_mask=source_mask,
-            target_mask=target_mask,
+            source_mask=_source_mask,
+            target_mask=_target_mask,
             max_times=max_times,
             max_depth=max_depth,
             max_edges=max_edges,
@@ -180,6 +242,8 @@ class ConceptNetMatcher:
         self,
         source_sentence: str,
         target_sentence: str = "",
+        source_mask: str = "",
+        target_mask: str = "",
         max_times: int = 1000,
         max_depth: int = 3,
         max_edges: int = 3,
@@ -193,17 +257,21 @@ class ConceptNetMatcher:
             end position is the index of the word behind the match
             start position is the index of the first word in the match
         """
-        source_tokens, source_mask = self.tokenize_and_mask(source_sentence)
+        source_tokens, _source_mask = self.tokenize_and_mask(
+            source_sentence, source_mask
+        )
         if len(target_sentence) == 0:
-            target_tokens, target_mask = source_tokens, source_mask
+            target_tokens, _target_mask = source_tokens, _source_mask
         else:
-            target_tokens, target_mask = self.tokenize_and_mask(target_sentence)
+            target_tokens, _target_mask = self.tokenize_and_mask(
+                target_sentence, target_mask
+            )
 
         result = self.net_matcher.match_by_node_embedding(
             source_sentence=source_tokens,
             target_sentence=target_tokens,
-            source_mask=source_mask,
-            target_mask=target_mask,
+            source_mask=_source_mask,
+            target_mask=_target_mask,
             max_times=max_times,
             max_depth=max_depth,
             max_edges=max_edges,
@@ -217,6 +285,8 @@ class ConceptNetMatcher:
         self,
         source_sentence: str,
         target_sentence: str = "",
+        source_mask: str = "",
+        target_mask: str = "",
         max_times: int = 1000,
         max_depth: int = 3,
         max_edges: int = 3,
@@ -232,17 +302,21 @@ class ConceptNetMatcher:
             end position is the index of the word behind the match
             start position is the index of the first word in the match
         """
-        source_tokens, source_mask = self.tokenize_and_mask(source_sentence)
+        source_tokens, _source_mask = self.tokenize_and_mask(
+            source_sentence, source_mask
+        )
         if len(target_sentence) == 0:
-            target_tokens, target_mask = source_tokens, source_mask
+            target_tokens, _target_mask = source_tokens, _source_mask
         else:
-            target_tokens, target_mask = self.tokenize_and_mask(target_sentence)
+            target_tokens, _target_mask = self.tokenize_and_mask(
+                target_sentence, target_mask
+            )
 
         result = self.net_matcher.match_by_token(
             source_sentence=source_tokens,
             target_sentence=target_tokens,
-            source_mask=source_mask,
-            target_mask=target_mask,
+            source_mask=_source_mask,
+            target_mask=_target_mask,
             max_times=max_times,
             max_depth=max_depth,
             max_edges=max_edges,
@@ -331,7 +405,7 @@ class ConceptNetMatcher:
                 offset += len(m[1])
         return self.tokenizer.decode(sentence_tokens)
 
-    def tokenize_and_mask(self, sentence: str):
+    def tokenize_and_mask(self, sentence: str, sentence_mask: str):
         """
         Args:
             sentence: A sentence to be tagged by Part of Speech (POS)
@@ -339,16 +413,62 @@ class ConceptNetMatcher:
             A list of token ids.
             A list of POS mask.
         """
+        use_mask = False
+        if len(sentence_mask) != 0:
+            mask_characters = set(sentence_mask)
+            if mask_characters != {"+", "-"}:
+                raise ValueError(
+                    f"Sentence mask should only be comprised of '+' "
+                    f"and '-',"
+                    f" but got {sentence_mask}"
+                )
+            elif len(sentence) != len(sentence_mask):
+                raise ValueError(
+                    f"Sentence mask should be the same length as the " f"sentence."
+                )
+            use_mask = True
+
         tokens = nltk.word_tokenize(sentence.lower())
         masks = []
         ids = []
+        filter_set = {
+            "do",
+            "did",
+            "does",
+            "done",
+            "have",
+            "having",
+            "has",
+            "had" "be",
+            "am",
+            "is" "are",
+            "being",
+            "was",
+            "were",
+        }
+        offset = 0
         for token, pos in nltk.pos_tag(tokens):
-            ids.append(self.tokenizer.encode(token, add_special_tokens=False))
-            if "NN" in pos or "JJ" in pos or "RB" in pos or "VB" in pos:
-                # noun, adjective, adverb, verb
-                masks.append([1] * len(ids[-1]))
-            else:
-                masks.append([0] * len(ids[-1]))
+            token_position = sentence.find(token, offset)
+            offset += token_position + len(token)
+            allowed_tokens = []
+            # Relaxed matching, If any part is not masked, allow searchin for that part
+            if not use_mask or "+" in set(sentence_mask[token_position:offset]):
+                ids.append(self.tokenizer.encode(token, add_special_tokens=False))
+                if (
+                    "NN" in pos
+                    or "JJ" in pos
+                    or "RB" in pos
+                    # or "VB" in pos
+                    and token not in filter_set
+                ):
+                    allowed_tokens.append(token)
+                    # noun, adjective, adverb, verb
+                    masks.append([1] * len(ids[-1]))
+                else:
+                    masks.append([0] * len(ids[-1]))
+            logging.debug(
+                f"Tokens allowed for matching: {allowed_tokens} from sentence {sentence}"
+            )
         return [i for iid in ids for i in iid], [m for mask in masks for m in mask]
 
     def __reduce__(self):

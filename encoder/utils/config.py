@@ -23,7 +23,6 @@ class C4KBTrainConfig(BaseModel):
     matcher_max_times: int = 300
     matcher_max_depth: int = 2
     matcher_max_edges: int = 6
-    matcher_similarity_exclude: List[str] = None
 
     device_map: Optional[Dict[int, List[int]]] = None
     load_worker_num: Optional[int] = 0
@@ -120,9 +119,24 @@ class GLUETrainConfig(BaseModel):
     kb_process_batch_size_per_gpu: int = 32
 
 
+class IterTrainConfig(BaseModel):
+    task_trainer_config: Dict[str, Any] = None
+    task_trainer_stage: str
+    kb_trainer_checkpoint: str
+    kb_trainer_stage: str
+    attr_steps: int = 1
+    attr_threshold: float = 0.3
+    attr_epoch_interval: int = 1
+    matcher_max_times: int = 300
+    matcher_max_depth: int = 2
+    matcher_max_edges: int = 12
+    matcher_seed: int = -1
+    matcher_discard_edges_if_similarity_below: float = 0.5
+
+
 class Config(BaseModel):
     # Cuda ids of GPUs
-    gpus: Optional[List[int]] = [0]
+    gpus: Optional[Union[int, List[int]]] = [0]
 
     # Maximum validation epochs allowed before stopping
     # when monitored metric is not decreasing
@@ -133,13 +147,32 @@ class Config(BaseModel):
     working_directory: str = "./train"
 
     # example: ["kb_encoder", "qa"]
-    # config in configs must match items in pipeline
-    pipeline: List[str] = []
+    # config in configs must match items in stages
+    stages: List[str] = []
     configs: List[
         Union[
-            QATrainConfig, C4KBTrainConfig, CommonsenseQATrainConfig, GLUETrainConfig,
+            QATrainConfig,
+            C4KBTrainConfig,
+            CommonsenseQATrainConfig,
+            GLUETrainConfig,
+            IterTrainConfig,
         ]
     ] = []
+
+
+def stage_name_to_config(name: str, config_dict: dict = None):
+    map = {
+        "c4kb": C4KBTrainConfig,
+        "qa": QATrainConfig,
+        "glue": GLUETrainConfig,
+        "commonsense_qa": CommonsenseQATrainConfig,
+        "iter": IterTrainConfig,
+    }
+    if name in map:
+        config_dict = config_dict or {}
+        return map[name](**config_dict)
+    else:
+        raise ValueError(f"Unknown stage {p}.")
 
 
 def load_config(path: str) -> Config:
@@ -150,38 +183,17 @@ def load_config(path: str) -> Config:
             early_stopping_patience=config_dict["early_stopping_patience"],
             working_directory=config_dict["working_directory"],
         )
-        for p, c in zip(config_dict["pipeline"], config_dict["configs"]):
-            config.pipeline.append(p)
-            if p == "c4kb":
-                config.configs.append(C4KBTrainConfig(**c))
-            elif p == "qa":
-                config.configs.append(QATrainConfig(**c))
-            elif p == "glue":
-                config.configs.append(GLUETrainConfig(**c))
-            elif p == "commonsense_qa":
-                config.configs.append(CommonsenseQATrainConfig(**c))
-            else:
-                raise ValueError(f"Unknown stage {p}.")
+        for s, c in zip(config_dict["stages"], config_dict["configs"]):
+            config.stages.append(s)
+            config.configs.append(stage_name_to_config(s, c))
         return config
 
 
 def generate_config(stages: List[str], path: str, print_config: bool = True):
     config = Config()
     for stage in stages:
-        if stage == "qa":
-            config.pipeline.append(stage)
-            config.configs.append(QATrainConfig())
-        elif stage == "c4kb":
-            config.pipeline.append(stage)
-            config.configs.append(C4KBTrainConfig)
-        elif stage == "glue":
-            config.pipeline.append(stage)
-            config.configs.append(GLUETrainConfig())
-        elif stage == "commonsense_qa":
-            config.pipeline.append(stage)
-            config.configs.append(CommonsenseQATrainConfig())
-        else:
-            raise ValueError(f"Unknown stage {stage}")
+        config.stages.append(stage)
+        config.configs.append(stage_name_to_config(stage))
 
     if print_config:
         pprint(config.dict())

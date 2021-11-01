@@ -50,6 +50,7 @@ class CommonsenseQATrainer(pl.LightningModule):
             mirror=huggingface_mirror,
             return_dict=True,
         )
+        self.real_device = "cpu"
 
     @property
     def monitor(self):
@@ -86,20 +87,29 @@ class CommonsenseQATrainer(pl.LightningModule):
             collate_fn=collate_function_dict_to_batch_encoding,
         )
 
-    def on_train_start(self):
+    def on_fit_start(self):
         if self.config.device_map is not None:
             if self.is_distributed:
                 raise ValueError(
                     "Parallelize T5 model is incompatible with distributed training."
                 )
+            start_device_id = [k for k, v in self.config.device_map.items() if 0 in v][
+                0
+            ]
+            # replace device property
+            self.real_device = f"cuda:{start_device_id}"
             self.model.parallelize(self.config.device_map)
+        else:
+            self.real_device = self.device
 
     # noinspection PyTypeChecker
     def training_step(self, batch: BatchEncoding, batch_idx):
         # answer shape [batch_size, sequence_length]
-        input_ids = batch["sentence"].to(self.device)
+        input_ids = batch["sentence"].to(self.real_device)
         out = self.model(
-            input_ids=input_ids, attention_mask=batch["mask"], labels=batch["answer"],
+            input_ids=input_ids,
+            attention_mask=batch["mask"].to(self.real_device),
+            labels=batch["answer"].to(self.real_device),
         )
         # for i in range(out.logits.shape[0]):
         #     print(self.tokenizer.decode(input_ids[i]))
@@ -115,9 +125,9 @@ class CommonsenseQATrainer(pl.LightningModule):
     # noinspection PyTypeChecker
     def validation_step(self, batch: BatchEncoding, _batch_idx):
         out = self.model.generate(
-            batch["sentence"].to(self.device),
+            batch["sentence"].to(self.real_device),
             max_length=self.config.generate_length,
-            attention_mask=batch["mask"],
+            attention_mask=batch["mask"].to(self.real_device),
             early_stopping=True,
         )
         result = t.full(
@@ -132,7 +142,7 @@ class CommonsenseQATrainer(pl.LightningModule):
 
     def validation_epoch_end(self, outputs):
         if self.is_distributed:
-            t.cuda.set_device(self.device)
+            t.cuda.set_device(self.real_device)
             gathered_outputs = [None] * get_world_size()
             all_gather_object(gathered_outputs, outputs)
             gathered_outputs = list(itertools.chain.from_iterable(gathered_outputs))
@@ -152,9 +162,9 @@ class CommonsenseQATrainer(pl.LightningModule):
 
     def test_step(self, batch: BatchEncoding, _batch_idx):
         out = self.model.generate(
-            batch["sentence"].to(self.device),
+            batch["sentence"].to(self.real_device),
             max_length=self.config.generate_length,
-            attention_mask=batch["mask"],
+            attention_mask=batch["mask"].to(self.real_device),
             early_stopping=True,
         )
         result = t.full(
@@ -169,7 +179,7 @@ class CommonsenseQATrainer(pl.LightningModule):
 
     def test_epoch_end(self, outputs):
         if self.is_distributed:
-            t.cuda.set_device(self.device)
+            t.cuda.set_device(self.real_device)
             gathered_outputs = [None] * get_world_size()
             all_gather_object(gathered_outputs, outputs)
             gathered_outputs = list(itertools.chain.from_iterable(gathered_outputs))

@@ -59,7 +59,7 @@ if __name__ == "__main__":
     if args.command == "train" or args.command == "test":
         ctx = get_context("spawn")
         config = load_config(args.config)
-        assert len(config.pipeline) == len(
+        assert len(config.stages) == len(
             config.configs
         ), "Pipeline stage number must be equal to the number of stage configs."
 
@@ -80,14 +80,14 @@ if __name__ == "__main__":
             else:  # Script called as `python -m a.b.c`
                 command = [sys.executable, "-m", __main__.__spec__.name] + sys.argv[1:]
 
-            for i in range(len(config.pipeline)):
-                logging.info(f"Running stage {i} type: {config.pipeline[i]}")
+            for i in range(len(config.stages)):
+                logging.info(f"Running stage {i} type: {config.stages[i]}")
                 logging.info("=" * 100)
                 process = subprocess.Popen(command + ["--stage", str(i)])
                 process.wait()
         else:
             assert (
-                0 <= args.stage < len(config.pipeline)
+                0 <= args.stage < len(config.stages)
             ), f"Stage number {args.stage} out of range."
             train(config, args.stage, only_test=args.command == "test")
 

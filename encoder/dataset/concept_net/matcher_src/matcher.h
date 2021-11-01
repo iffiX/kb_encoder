@@ -1,7 +1,8 @@
 #ifndef MATCHER_H
 #define MATCHER_H
 // Uncomment below macro to enable viewing the decision process
-//#define DEBUG
+// #define DEBUG_DECISION
+// #define DEBUG
 #include "cista.h"
 #include "highfive/H5File.hpp"
 #include "highfive/H5DataSet.hpp"
@@ -21,15 +22,22 @@ class TrieNode {
 public:
     int token = -1;
     bool isWordEnd = false;
-    std::unordered_map<int, TrieNode*> children;
+    std::unordered_map<int, TrieNode *> children;
 public:
     TrieNode() = default;
+
     TrieNode(int token, bool isWordEnd);
+
     ~TrieNode();
-    TrieNode* addChild(int childToken, bool isChildWordEnd);
+
+    TrieNode *addChild(int childToken, bool isChildWordEnd);
+
     bool removeChild(int childToken);
+
     void clear();
+
     size_t initializeFromString(const std::string &content, size_t start = 0);
+
     std::string serialize() const;
 };
 
@@ -39,13 +47,21 @@ public:
 
 public:
     Trie() = default;
+
     explicit Trie(const std::vector<std::vector<int>> &words);
+
     void insert(const std::vector<int> &word);
+
     bool remove(const std::vector<int> &word);
+
     void clear();
+
     std::vector<int> matchForStart(const std::vector<int> &sentence, size_t start = 0) const;
+
     std::unordered_map<size_t, std::vector<int>> matchForAll(const std::vector<int> &sentence) const;
+
     void initializeFromString(const std::string &content);
+
     std::string serialize() const;
 };
 
@@ -84,8 +100,11 @@ public:
     std::vector<std::string> rawRelationships;
     std::unordered_set<size_t> disabledEdges;
     std::shared_ptr<HighFive::File> nodeEmbeddingFile;
+    std::shared_ptr<HighFive::DataSet> nodeEmbeddingDataset;
     std::shared_ptr<void> nodeEmbeddingMem;
     std::string nodeEmbeddingFileName;
+    size_t nodeEmbeddingDim = 0;
+    bool nodeEmbeddingSimplifyWithInt8 = false;
 
     std::vector<std::vector<int>> tokenizedNodes;
     std::vector<std::vector<int>> tokenizedRelationships;
@@ -96,24 +115,40 @@ public:
 
 public:
     KnowledgeBase() = default;
+
     void clearDisabledEdges();
+
     void disableEdgesOfRelationships(const std::vector<std::string> &relationships);
+
     void disableEdgesOfNodes(const std::vector<std::string> &nodes);
+
     std::vector<long> findNodes(const std::vector<std::string> &nodes) const;
+
     std::vector<Edge> getEdges(long source = -1, long target = -1) const;
+
     const std::vector<std::string> &getNodes() const;
+
     std::vector<std::string> getNodes(const std::vector<long> &nodeIndexes) const;
+
     void setNodeEmbeddingFileName(const std::string &path, bool loadEmbeddingToMem = true);
+
     bool isLandmarkInited() const;
+
     void initLandmarks(int seedNum = 100, int landmarkNum = 100, int seed = -1, const std::string &landmarkPath = "");
+
     int distance(long node1, long node2, bool fast = true) const;
+
+    float cosineSimilarity(long node1, long node2) const;
+
     void save(const std::string &archivePath) const;
+
     void load(const std::string &archivePath, bool loadEmbeddingToMem = true);
+
     void refresh(bool loadEmbeddingToMem);
 
 private:
     struct PriorityCmp {
-        template <typename T1, typename T2>
+        template<typename T1, typename T2>
         bool operator()(const std::pair<T1, T2> &pair1, const std::pair<T1, T2> &pair2);
     };
 
@@ -138,9 +173,18 @@ private:
 
     int ALTDistance(long node1, long node2) const;
 
-    template <typename T>
+    static float cosineSimilarityFromDataset(const std::shared_ptr<HighFive::DataSet> &embedding,
+                                             long node1, long node2, size_t dim,
+                                             bool simplifyWithInt8);
+
+    static float cosineSimilarityFromMem(const std::shared_ptr<void> &embedding,
+                                         long node1, long node2, size_t dim,
+                                         bool simplifyWithInt8);
+
+    template<typename T>
     static cista::raw::vector<T> vector2ArchiveVector(const std::vector<T> &vec);
-    template <typename T>
+
+    template<typename T>
     static std::vector<T> archiveVector2Vector(const cista::raw::vector<T> &vec);
 };
 
@@ -149,19 +193,23 @@ public:
     KnowledgeBase kb;
 public:
     explicit KnowledgeMatcher(const KnowledgeBase &knowledgeBase);
+
     explicit KnowledgeMatcher(const std::string &archivePath);
+
     MatchResult
     matchByNode(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
                 const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
                 int maxTimes = 100, int maxDepth = 3, int maxEdges = 10, int seed = -1,
                 float discardEdgesIfSimilarityBelow = 0,
                 float discardEdgesIfRankBelow = 0) const;
+
     MatchResult
     matchByNodeEmbedding(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
                          const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
                          int maxTimes = 100, int maxDepth = 3, int maxEdges = 10, int seed = -1,
                          float discardEdgesIfSimilarityBelow = 0.5,
                          float discardEdgesIfRankBelow = 0) const;
+
     MatchResult
     matchByToken(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
                  const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
@@ -170,26 +218,28 @@ public:
                  float discardEdgesIfRankBelow = 0,
                  const std::vector<std::vector<int>> &rankFocus = {},
                  const std::vector<std::vector<int>> &rankExclude = {}) const;
+
     std::string getNodeTrie() const;
+
     std::vector<std::pair<std::vector<int>, long>> getNodeMap() const;
+
     void save(const std::string &archivePath) const;
+
     void load(const std::string &archivePath, bool loadEmbeddingToMem = true);
 
 private:
     struct VectorHash {
-        std::size_t operator()(std::vector<int> const& vec) const;
+        std::size_t operator()(std::vector<int> const &vec) const;
     };
 
-    struct PairHash
-    {
-        template <class T1, class T2>
-        std::size_t operator() (const std::pair<T1, T2> &pair) const;
+    struct PairHash {
+        template<class T1, class T2>
+        std::size_t operator()(const std::pair<T1, T2> &pair) const;
     };
 
-    struct UndirectedPairHash
-    {
-        template <class T1, class T2>
-        std::size_t operator() (const std::pair<T1, T2> &pair) const;
+    struct UndirectedPairHash {
+        template<class T1, class T2>
+        std::size_t operator()(const std::pair<T1, T2> &pair) const;
     };
 
     struct VisitedPath {
@@ -244,4 +294,5 @@ private:
     static float similarity(const std::vector<int> &source, const std::vector<int> &target);
 
 };
+
 #endif //MATCHER_H

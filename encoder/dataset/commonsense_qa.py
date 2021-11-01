@@ -118,21 +118,9 @@ class CommonsenseQADataset:
             data = self.test_data[index]
         if self.use_matcher:
             data = copy.deepcopy(data)
-            similarity_exclude = [
-                "the",
-                "a",
-                "an",
-                "to",
-                "of",
-                "for",
-                "is",
-                "are",
-                "you",
-                "he",
-            ]
             # if split == "train":
             #     match = self.matcher.match(
-            #         data["org_sentence"],
+            #         data["text_sentence"],
             #         similarity_exclude=similarity_exclude + data["false_answers_match"],
             #         rank_focus=data["answer_match"] + data["question_match"],
             #         rank_exclude=data["false_answers_match"],
@@ -142,42 +130,67 @@ class CommonsenseQADataset:
             #     )
             # else:
             #     match = self.matcher.match(
-            #         data["org_sentence"],
+            #         data["text_sentence"],
             #         similarity_exclude=similarity_exclude,
             #         rank_focus=data["question_match"],
             #         max_times=300,
             #         max_depth=2,
             #         max_edges=4,
             #     )
-            match = self.matcher.match(
-                data["org_sentence"],
-                similarity_exclude=similarity_exclude,
-                rank_focus=data["question_match"],
-                max_times=300,
-                max_depth=3,
-                max_edges=9,
-            )
-            new_sentence = self.matcher.insert_match(data["org_sentence"], match)
-            # BERT tokenizer doesn't honor T5 eos token / Roberta sep token
-            # and choice brackets, fix it.
-            # Have no effect for BERT, ALBERT.
-            new_sentence = new_sentence.replace("< / s >", "</s>")
-            if self.include_option_label_in_sentence:
-                new_sentence = new_sentence.replace("( a )", "(a)")
-                new_sentence = new_sentence.replace("( b )", "(b)")
-                new_sentence = new_sentence.replace("( c )", "(c)")
-                new_sentence = new_sentence.replace("( d )", "(d)")
-                new_sentence = new_sentence.replace("( e )", "(e)")
 
-            # Note that the sentence is now uncased after being processed
-            # by BERT tokenizer
-            data["sentence"] = self.tokenizer(
-                new_sentence,
+            # # BERT tokenizer doesn't honor T5 eos token / Roberta sep token
+            # # and choice brackets, fix it.
+            # # Have no effect for BERT, ALBERT.
+            # new_sentence = new_sentence.replace("< / s >", "</s>")
+            # if self.include_option_label_in_sentence:
+            #     new_sentence = new_sentence.replace("( a )", "(a)")
+            #     new_sentence = new_sentence.replace("( b )", "(b)")
+            #     new_sentence = new_sentence.replace("( c )", "(c)")
+            #     new_sentence = new_sentence.replace("( d )", "(d)")
+            #     new_sentence = new_sentence.replace("( e )", "(e)")
+            #
+            # # Note that the sentence is now uncased after being processed
+            # # by BERT tokenizer
+            # data["sentence"] = self.tokenizer(
+            #     new_sentence,
+            #     padding="max_length",
+            #     max_length=self.max_seq_length,
+            #     truncation=True,
+            #     return_tensors="pt",
+            # ).input_ids
+
+            # match = self.matcher.match_by_node_embedding(
+            #     data["text_choices"],
+            #     target_sentence=data["text_question"],
+            #     max_times=300,
+            #     max_depth=2,
+            #     max_edges=12,
+            #     discard_edges_if_similarity_below=0.5,
+            # )
+            # match = self.matcher.match_by_token(
+            #     data["text_choices"],
+            #     target_sentence=data["text_question"],
+            #     max_times=300,
+            #     max_depth=2,
+            #     max_edges=12,
+            #     rank_focus=data["question_match"],
+            # )
+
+            match = self.matcher.match(
+                data["text_choices"], target_sentence=data["text_question"]
+            )
+            new_choices = self.matcher.insert_match(data["text_choices"], match)
+            encoded_sentence = self.tokenizer(
+                data["text_question"],
+                new_choices,
                 padding="max_length",
                 max_length=self.max_seq_length,
                 truncation=True,
                 return_tensors="pt",
-            ).input_ids
+            )
+            data["sentence"] = encoded_sentence.input_ids
+            data["mask"] = encoded_sentence.attention_mask
+
         return data
 
     def validate_logits(self, batch: BatchEncoding, logits: t.Tensor):
@@ -341,10 +354,9 @@ class CommonsenseQADataset:
                 preprocessed = {
                     "sentence": encoded_sentence.input_ids,
                     "mask": encoded_sentence.attention_mask,
-                    "org_sentence": org_sentence,
-                    "question": self.tokenizer.encode(
-                        entry["question"]["question_concept"], add_special_tokens=False
-                    ),
+                    "text_question": entry["question"]["stem"],
+                    "text_choices": sentence_choices,
+                    # DEPRECATED, prepared for match by token, rank focus and exclude
                     "question_match": [entry["question"]["question_concept"]],
                     "choices": choices,
                     "id": entry["id"],
@@ -387,12 +399,15 @@ class CommonsenseQADataset:
                     # tokens
                     answer.masked_fill_(answer == self.tokenizer.pad_token_id, -100)
                     preprocessed["answer"] = answer
+
+                    # DEPRECATED, prepared for match by token, rank focus and exclude
                     preprocessed["answer_match"] = [
                         ch["text"]
                         for ch in entry["question"]["choices"]
                         if ch["label"] == entry["answerKey"]
                     ]
 
+                    # DEPRECATED, prepared for match by token, rank focus and exclude
                     preprocessed["false_answers_match"] = [
                         ch["text"]
                         for ch in entry["question"]["choices"]

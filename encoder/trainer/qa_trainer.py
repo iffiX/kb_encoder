@@ -5,7 +5,8 @@ from transformers import AutoTokenizer, BatchEncoding
 from .c4kb_trainer import C4KBTrainer
 from ..model.ext_vocab import ExtendVocabForQA
 from ..dataset.base import EmptyDataset, collate_function_dict_to_batch_encoding
-from ..dataset.qa.squad import SQuADDataset
+
+# from ..dataset.qa.squad import SQuADDataset
 from ..utils.config import QATrainConfig
 from ..utils.settings import proxies, model_cache_dir, huggingface_mirror
 

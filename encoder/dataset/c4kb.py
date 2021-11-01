@@ -22,24 +22,12 @@ from encoder.utils.settings import (
 
 
 class C4KBDataset:
-    DEFAULT_SIMILARITY_EXCLUDE = [
-        "the",
-        "a",
-        "an",
-        "to",
-        "of",
-        "for",
-        "is",
-        "are",
-    ]
-
     def __init__(
         self,
         tokenizer: PreTrainedTokenizerBase,
         matcher_max_times: int = 300,
         matcher_max_depth: int = 2,
         matcher_max_edges: int = 6,
-        matcher_similarity_exclude: List[str] = None,
         matcher_seed: int = -1,
         c4_seed: int = 2628807,
         max_seq_length: int = 128,
@@ -53,9 +41,6 @@ class C4KBDataset:
         self.matcher_max_times = matcher_max_times
         self.matcher_max_depth = matcher_max_depth
         self.matcher_max_edges = matcher_max_edges
-        self.matcher_similarity_exclude = (
-            matcher_similarity_exclude or self.DEFAULT_SIMILARITY_EXCLUDE
-        )
         self.matcher_seed = matcher_seed
         self.c4_seed = c4_seed
         self.max_seq_length = max_seq_length
@@ -102,10 +87,14 @@ class C4KBDataset:
         em_total = 0
         for i in range(tokens.shape[0]):
             answer = self.tokenizer.decode(tokens[i])
+            sentence = self.tokenizer.decode(
+                batch["sentence"][i], skip_special_tokens=False
+            )
             offset = 0
             em_per_sample = 0
+
             print(
-                f"sentence: [{self.tokenizer.decode(batch['input'][i], skip_special_tokens=True)}] \n"
+                f"sentence: [{sentence}] \n"
                 f"answer: [{answer}] \n"
                 f"ref_answer: [{batch['knowledge_list'][i]}]"
             )
@@ -127,8 +116,9 @@ class C4KBDataset:
                     )
                 else:
                     break
-            em_per_sample /= len(batch["knowledge_list"][i])
-            em_total += em_per_sample
+            if len(batch["knowledge_list"][i]) != 0:
+                em_per_sample /= len(batch["knowledge_list"][i])
+                em_total += em_per_sample
         return {"EM": em_total / total}
 
     def get_word_set(self, sentence: str):
@@ -142,19 +132,24 @@ class C4KBDataset:
         else:
             sample = next(self.validate_data)
         sentences = sent_tokenize(sample["text"], language="english")
-
         # Rank sentence by their approximate length distance to the optimal input length
         # T5 usually has 1/4 the number of tokens of total text length
-        selected_sentence = sorted(
+        selected_sentences = sorted(
             sentences, key=lambda x: abs(len(x) / 4 - self.max_seq_length)
-        )[0]
+        )
+        selected_sentence = selected_sentences[0]
+        selected_target_sentence = (
+            selected_sentence if len(selected_sentences) < 2 else selected_sentences[1]
+        )
 
-        match = self.matcher.match(
+        match = self.matcher.match_by_node_embedding(
             selected_sentence,
-            similarity_exclude=self.matcher_similarity_exclude,
-            max_times=self.matcher_max_times,
-            max_depth=self.matcher_max_depth,
-            max_edges=self.matcher_max_edges,
+            target_sentence=selected_target_sentence,
+            max_times=300,
+            max_depth=2,
+            max_edges=12,
+            discard_edges_if_similarity_below=0.5,
+            seed=self.matcher_seed,
         )
 
         input = ""
@@ -191,9 +186,9 @@ class C4KBDataset:
             encoded_predict_target == self.tokenizer.pad_token_id, -100
         )
         preprocessed = {
-            "input": encoded_input.input_ids,
+            "sentence": encoded_input.input_ids,
             "mask": encoded_input.attention_mask,
-            "predict_target": encoded_predict_target,
+            "answer": encoded_predict_target,
             "knowledge_list": knowledge_combined_list,
             "id": hash(sample["text"]),
         }

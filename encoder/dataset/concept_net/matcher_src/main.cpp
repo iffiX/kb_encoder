@@ -131,42 +131,41 @@ int main() {
 //    KnowledgeMatcher matcher("/data/conceptnet-archive.data");
 //    cout << matcher.matchByToken(sentence, {}, 1000, 2, 5, 1920301, 0, {{18097}, {2187, 24302}}, {{1996}, {1037}, {2019}, {2002}, {2000}, {2010}}, {}) << endl;
 
-    std::vector<int> sentence{1037,
-                              24135,
-                              2341,
-                              2003,
-                              14057,
-                              2005,
-                              2048,
-                              3257,
-                              3604,
-                              1010,
-                              2021,
-                              2009,
-                              2036,
-                              4240,
-                              2004,
-                              1037,
-                              3036,
-                              5468,
-                              2012,
-                              1037,
-                              2054,
-                              1029};
-    std::vector<int> targetSentence{2924, 1010, 3075, 1010, 2533, 3573, 1010, 6670, 1010, 2047, 2259};
+
+//    std::vector<int> sourceSentence{2924, 1010, 3075, 1010, 2533, 3573, 1010, 6670, 1010, 2047, 2259};
+//    std::vector<int> sourceMask{1,0,0,0,1,1,0,1,0,0,1};
+//    std::vector<int> targetSentence{1037,24135,2341,2003,14057,2005,2048,3257,3604,1010,2021,2009,2036,4240,2004,
+//                                    1037,3036,5468,2012,1037,2054,1029};
+//    std::vector<int> targetMask{0,0,1,0,0,0,0,1,1,0,0,0,0,0,0,0,1,1,0,0,0,0};
+//    KnowledgeMatcher matcher("/data/conceptnet-archive.data");
+//    matcher.matchByNodeEmbedding(sourceSentence, targetSentence, sourceMask, targetMask,
+//                                 300, 2, 12,1920301,0.5,0);
+
+    std::vector<int> sourceSentence{2202,2051,1010,2191,5005,1010,2191,2162,1010,2191,3521,1010,2191,24748};
+    std::vector<int> sourceMask{0,1,0,0,1,0,0,1,0,0,1,0,0,1};
+    std::vector<int> targetSentence{2065,2017,2215,9396,1010,2054,2003,2242,2017,2323,3046,2000,2079,2007,1996,2088,1029};
+    std::vector<int> targetMask{0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,1,0};
+    std::vector<std::vector<int>> rankFocus{{2242,2017}};
     KnowledgeMatcher matcher("/data/conceptnet-archive.data");
-    matcher.kb.initLandmarks(100, 10, -1, "/data/conceptnet-landmark.cache");
-    // bank -> security, distance = 1
-    TIME_BEGIN(0);
-    for(int i = 0; i < 1000; i++)
-        matcher.kb.distance(2037, 9779);
-    TIME_END(0);
-    cout << matcher.kb.distance(2037, 9779) << endl;
-    // bank -> security measure, distance = 3
-    TIME_BEGIN(1);
-    for(int i = 0; i < 100; i++)
-        matcher.kb.distance(2037, 904700);
-    TIME_END(1);
-    cout << matcher.kb.distance(2037, 904700) << endl;
-    //cout << matcher.matchByNode(sentence, targetSentence, {}, {}, 300, 2, 5, 1920301, 0);
+//    matcher.matchByNodeEmbedding(sourceSentence, targetSentence, sourceMask, targetMask,
+//                                 300, 2, 12,1920301,0.5,0);
+
+    matcher.matchByToken(sourceSentence, targetSentence, sourceMask, targetMask,
+                                 300, 2, 12,1920301,0.5,0, rankFocus, {});
+
+    //    KnowledgeMatcher matcher("/data/conceptnet-archive.data");
+//    matcher.kb.initLandmarks(100, 10, -1, "/data/conceptnet-landmark.cache");
+//    // bank -> security, distance = 1
+//    TIME_BEGIN(0);
+//    for(int i = 0; i < 1000; i++)
+//        matcher.kb.distance(2037, 9779);
+//    TIME_END(0);
+//    cout << matcher.kb.distance(2037, 9779) << endl;
+//    // bank -> security measure, distance = 3
+//    TIME_BEGIN(1);
+//    for(int i = 0; i < 100; i++)
+//        matcher.kb.distance(2037, 904700);
+//    TIME_END(1);
+//    cout << matcher.kb.distance(2037, 904700) << endl;
+//    //cout << matcher.matchByNode(sentence, targetSentence, {}, {}, 300, 2, 5, 1920301, 0);
 }

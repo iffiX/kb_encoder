@@ -13,11 +13,7 @@ from ..utils.settings import proxies, model_cache_dir, huggingface_mirror
 
 class C4KBTrainer(pl.LightningModule):
     def __init__(
-        self,
-        config: C4KBTrainConfig,
-        stage_result_path="./",
-        is_distributed=False,
-        only_init_model=False,
+        self, config: C4KBTrainConfig, stage_result_path="./", is_distributed=False,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -34,24 +30,23 @@ class C4KBTrainer(pl.LightningModule):
             mirror=huggingface_mirror,
             return_dict=True,
         )
-        if not only_init_model:
-            self.tokenizer = T5TokenizerFast.from_pretrained(
-                config.base_type,
-                cache_dir=model_cache_dir,
-                proxies=proxies,
-                mirror=huggingface_mirror,
-            )
 
-            self.dataset = C4KBDataset(
-                tokenizer=self.tokenizer,
-                matcher_max_times=config.matcher_max_times,
-                matcher_max_depth=config.matcher_max_depth,
-                matcher_max_edges=config.matcher_max_edges,
-                matcher_similarity_exclude=config.matcher_similarity_exclude,
-                matcher_seed=config.seed,
-                c4_seed=config.seed + 2628,
-                max_seq_length=config.max_seq_length,
-            )
+        self.tokenizer = T5TokenizerFast.from_pretrained(
+            config.base_type,
+            cache_dir=model_cache_dir,
+            proxies=proxies,
+            mirror=huggingface_mirror,
+        )
+
+        self.dataset = C4KBDataset(
+            tokenizer=self.tokenizer,
+            matcher_max_times=config.matcher_max_times,
+            matcher_max_depth=config.matcher_max_depth,
+            matcher_max_edges=config.matcher_max_edges,
+            matcher_seed=config.seed,
+            c4_seed=config.seed + 2628,
+            max_seq_length=config.max_seq_length,
+        )
 
     @property
     def monitor(self):
@@ -89,11 +84,9 @@ class C4KBTrainer(pl.LightningModule):
 
     # noinspection PyTypeChecker
     def training_step(self, batch: BatchEncoding, batch_idx):
-        input_ids = batch["input"].to(self.device)
+        input_ids = batch["sentence"].to(self.device)
         out = self.model(
-            input_ids=input_ids,
-            attention_mask=batch["mask"],
-            labels=batch["predict_target"],
+            input_ids=input_ids, attention_mask=batch["mask"], labels=batch["answer"],
         )
         return out.loss
 
@@ -101,7 +94,7 @@ class C4KBTrainer(pl.LightningModule):
 
     def validation_step(self, batch: BatchEncoding, _batch_idx):
         out = self.model.generate(
-            batch["input"].to(self.device),
+            batch["sentence"].to(self.device),
             max_length=self.config.max_seq_length,
             attention_mask=batch["mask"],
             early_stopping=True,
