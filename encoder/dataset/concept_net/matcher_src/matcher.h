@@ -56,9 +56,11 @@ public:
 
     void clear();
 
-    std::vector<int> matchForStart(const std::vector<int> &sentence, size_t start = 0) const;
+    std::vector<std::vector<int>>
+    matchForStart(const std::vector<int> &sentence, size_t start = 0, bool allowSubMatch = false) const;
 
-    std::unordered_map<size_t, std::vector<int>> matchForAll(const std::vector<int> &sentence) const;
+    std::unordered_map<size_t, std::vector<std::vector<int>>>
+    matchForAll(const std::vector<int> &sentence, bool allowSubMatch = false) const;
 
     void initializeFromString(const std::string &content);
 
@@ -200,6 +202,7 @@ public:
     matchByNode(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
                 const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
                 int maxTimes = 100, int maxDepth = 3, int maxEdges = 10, int seed = -1,
+                int edgeBeamWidth = -1,
                 float discardEdgesIfSimilarityBelow = 0,
                 float discardEdgesIfRankBelow = 0) const;
 
@@ -207,6 +210,7 @@ public:
     matchByNodeEmbedding(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
                          const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
                          int maxTimes = 100, int maxDepth = 3, int maxEdges = 10, int seed = -1,
+                         int edgeBeamWidth = -1,
                          float discardEdgesIfSimilarityBelow = 0.5,
                          float discardEdgesIfRankBelow = 0) const;
 
@@ -214,6 +218,7 @@ public:
     matchByToken(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
                  const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
                  int maxTimes = 100, int maxDepth = 3, int maxEdges = 10, int seed = -1,
+                 int edgeBeamWidth = -1,
                  float discardEdgesIfSimilarityBelow = 0,
                  float discardEdgesIfRankBelow = 0,
                  const std::vector<std::vector<int>> &rankFocus = {},
@@ -247,15 +252,18 @@ private:
         int matchedFocusCount;
         std::vector<size_t> edges;
         std::unordered_map<size_t, float> similarities;
+        std::unordered_map<size_t, long> similarityTargets;
         std::unordered_set<long> visitedNodes;
 
-        float uncoveredSimilarity;
+        float bestSimilarity;
+        long bestSimilarityTarget;
         std::vector<size_t> uncoveredEdges;
     };
 
     struct VisitedSubGraph {
         std::vector<VisitedPath> visitedPaths;
         std::unordered_set<std::pair<long, long>, PairHash> coveredNodePairs;
+        std::unordered_map<std::pair<long, long>, float, PairHash> sourceToTargetSimilarity;
         std::unordered_map<long, std::vector<size_t>> coveredSubGraph;
     };
 
@@ -277,11 +285,17 @@ private:
 
     MatchResult selectPaths(VisitedSubGraph &visitedSubGraph,
                             const std::unordered_map<long, std::pair<size_t, size_t>> &posRef,
-                            int maxEdges, float discardEdgesIfRankBelow) const;
+                            int maxEdges,
+                            float discardEdgesIfRankBelow) const;
+
+    void trimPath(VisitedPath &path) const;
 
     void updatePath(VisitedPath &path,
                     const std::unordered_set<std::pair<long, long>, PairHash> &coveredNodePairs,
+                    const std::unordered_map<std::pair<long, long>, float, PairHash> &sourceToTargetSimilarity,
                     int remainingEdges) const;
+
+    static void keepTopK(std::vector<float> &weights, int k = -1);
 
     static void joinVisitedSubGraph(VisitedSubGraph &vsgOut, const VisitedSubGraph &vsgIn);
 

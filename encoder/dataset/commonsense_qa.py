@@ -25,6 +25,7 @@ class CommonsenseQADataset:
         max_seq_length: int = 128,
         generate_length: int = 16,
         use_matcher: bool = False,
+        matcher_seed: int = -1,
         include_option_label_in_sentence: bool = False,
         include_option_label_in_answer_and_choices: bool = False,
         use_option_label_as_answer_and_choices: bool = False,
@@ -36,6 +37,7 @@ class CommonsenseQADataset:
         self.max_seq_length = max_seq_length
         self.generate_length = generate_length
         self.use_matcher = use_matcher
+        self.matcher_seed = matcher_seed
         self.include_option_label_in_sentence = include_option_label_in_sentence
         self.include_option_label_in_answer_and_choices = (
             include_option_label_in_answer_and_choices
@@ -117,7 +119,8 @@ class CommonsenseQADataset:
         else:
             data = self.test_data[index]
         if self.use_matcher:
-            data = copy.deepcopy(data)
+            # data = copy.deepcopy(data)
+
             # if split == "train":
             #     match = self.matcher.match(
             #         data["text_sentence"],
@@ -159,37 +162,43 @@ class CommonsenseQADataset:
             #     return_tensors="pt",
             # ).input_ids
 
-            # match = self.matcher.match_by_node_embedding(
-            #     data["text_choices"],
-            #     target_sentence=data["text_question"],
-            #     max_times=300,
-            #     max_depth=2,
-            #     max_edges=12,
-            #     discard_edges_if_similarity_below=0.5,
-            # )
-            # match = self.matcher.match_by_token(
-            #     data["text_choices"],
-            #     target_sentence=data["text_question"],
-            #     max_times=300,
-            #     max_depth=2,
-            #     max_edges=12,
-            #     rank_focus=data["question_match"],
-            # )
+            if "matched" not in data:
+                data["matched"] = True
 
-            match = self.matcher.match(
-                data["text_choices"], target_sentence=data["text_question"]
-            )
-            new_choices = self.matcher.insert_match(data["text_choices"], match)
-            encoded_sentence = self.tokenizer(
-                data["text_question"],
-                new_choices,
-                padding="max_length",
-                max_length=self.max_seq_length,
-                truncation=True,
-                return_tensors="pt",
-            )
-            data["sentence"] = encoded_sentence.input_ids
-            data["mask"] = encoded_sentence.attention_mask
+                match = self.matcher.match_by_node_embedding(
+                    data["text_choices"],
+                    target_sentence=data["text_question"],
+                    max_times=300,
+                    max_depth=3,
+                    max_edges=12,
+                    seed=self.matcher_seed,
+                    discard_edges_if_similarity_below=0.5,
+                )
+
+                # match = self.matcher.match_by_token(
+                #     data["text_choices"],
+                #     target_sentence=data["text_question"],
+                #     max_times=300,
+                #     max_depth=2,
+                #     max_edges=12,
+                #     seed=self.matcher_seed,
+                #     # rank_focus=data["question_match"],
+                # )
+
+                # match = self.matcher.match(
+                #     data["text_choices"], target_sentence=data["text_question"]
+                # )
+                new_choices = self.matcher.insert_match(data["text_choices"], match)
+                encoded_sentence = self.tokenizer(
+                    data["text_question"],
+                    new_choices,
+                    padding="max_length",
+                    max_length=self.max_seq_length,
+                    truncation=True,
+                    return_tensors="pt",
+                )
+                data["sentence"] = encoded_sentence.input_ids
+                data["mask"] = encoded_sentence.attention_mask
 
         return data
 
@@ -397,7 +406,9 @@ class CommonsenseQADataset:
                     )
                     # Use -100 to focus on training the answer part, rather than pad
                     # tokens
-                    answer.masked_fill_(answer == self.tokenizer.pad_token_id, -100)
+                    answer.qrw4rtmasked_fill_(
+                        answer == self.tokenizer.pad_token_id, -100
+                    )
                     preprocessed["answer"] = answer
 
                     # DEPRECATED, prepared for match by token, rank focus and exclude

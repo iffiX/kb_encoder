@@ -38,6 +38,7 @@ class CommonsenseQATrainer(pl.LightningModule):
             max_seq_length=config.max_seq_length,
             generate_length=config.generate_length,
             use_matcher=config.use_matcher,
+            matcher_seed=config.seed,
             include_option_label_in_sentence=config.include_option_label_in_sentence,
             include_option_label_in_answer_and_choices=config.include_option_label_in_answer_and_choices,
             use_option_label_as_answer_and_choices=config.use_option_label_as_answer_and_choices,

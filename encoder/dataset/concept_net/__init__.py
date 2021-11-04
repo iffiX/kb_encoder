@@ -153,10 +153,10 @@ class ConceptNetMatcher:
             source_mask=source_mask,
             target_mask=target_mask,
             max_times=300,
-            max_depth=3,
-            max_edges=30,
-            discard_edges_if_similarity_below=0.4,
-            discard_edges_if_rank_below=0,
+            max_depth=2,
+            max_edges=6,
+            edge_beam_width=3,
+            discard_edges_if_similarity_below=0.5,
             seed=seed,
         )
         result_2 = self.match_by_token(
@@ -165,8 +165,9 @@ class ConceptNetMatcher:
             source_mask=source_mask,
             target_mask=target_mask,
             max_times=300,
-            max_depth=3,
-            max_edges=30,
+            max_depth=2,
+            max_edges=6,
+            edge_beam_width=3,
             seed=seed,
         )
         set_1 = {(k, v[0]): {tuple(vv) for vv in v[1]} for k, v in result_1.items()}
@@ -180,7 +181,8 @@ class ConceptNetMatcher:
         # print("")
         for match_pos, triples in set_1.items():
             if match_pos in set_2:
-                final_triples = triples.intersection(set_2[match_pos])
+                # final_triples = triples.intersection(set_2[match_pos])
+                final_triples = triples.union(set_2[match_pos])
                 final_set[match_pos] = final_triples
         return {mp[0]: (mp[1], list(triples)) for mp, triples in final_set.items()}
 
@@ -194,6 +196,7 @@ class ConceptNetMatcher:
         max_depth: int = 3,
         max_edges: int = 3,
         seed: int = -1,
+        edge_beam_width: int = -1,
         discard_edges_if_similarity_below: float = 0,
         discard_edges_if_rank_below: float = 0,
     ) -> Dict[int, Tuple[int, List[List[int]]]]:
@@ -233,6 +236,7 @@ class ConceptNetMatcher:
             max_depth=max_depth,
             max_edges=max_edges,
             seed=seed,
+            edge_beam_width=edge_beam_width,
             discard_edges_if_similarity_below=discard_edges_if_similarity_below,
             discard_edges_if_rank_below=discard_edges_if_rank_below,
         )
@@ -248,6 +252,7 @@ class ConceptNetMatcher:
         max_depth: int = 3,
         max_edges: int = 3,
         seed: int = -1,
+        edge_beam_width: int = -1,
         discard_edges_if_similarity_below: float = 0.5,
         discard_edges_if_rank_below: float = 0,
     ) -> Dict[int, Tuple[int, List[List[int]]]]:
@@ -276,6 +281,7 @@ class ConceptNetMatcher:
             max_depth=max_depth,
             max_edges=max_edges,
             seed=seed,
+            edge_beam_width=edge_beam_width,
             discard_edges_if_similarity_below=discard_edges_if_similarity_below,
             discard_edges_if_rank_below=discard_edges_if_rank_below,
         )
@@ -291,6 +297,7 @@ class ConceptNetMatcher:
         max_depth: int = 3,
         max_edges: int = 3,
         seed: int = -1,
+        edge_beam_width: int = -1,
         discard_edges_if_similarity_below: float = 0,
         discard_edges_if_rank_below: float = 0,
         rank_focus: List[str] = None,
@@ -321,6 +328,7 @@ class ConceptNetMatcher:
             max_depth=max_depth,
             max_edges=max_edges,
             seed=seed,
+            edge_beam_width=edge_beam_width,
             discard_edges_if_similarity_below=discard_edges_if_similarity_below,
             discard_edges_if_rank_below=discard_edges_if_rank_below,
             rank_focus=self.tokenizer(rank_focus, add_special_tokens=False).input_ids
@@ -441,7 +449,8 @@ class ConceptNetMatcher:
             "has",
             "had" "be",
             "am",
-            "is" "are",
+            "is",
+            "are",
             "being",
             "was",
             "were",
@@ -458,7 +467,7 @@ class ConceptNetMatcher:
                     "NN" in pos
                     or "JJ" in pos
                     or "RB" in pos
-                    # or "VB" in pos
+                    or "VB" in pos
                     and token not in filter_set
                 ):
                     allowed_tokens.append(token)

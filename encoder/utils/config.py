@@ -8,6 +8,7 @@ class C4KBTrainConfig(BaseModel):
     load: bool = False
     seed: int = 0
     save: bool = True
+    save_last: bool = True
     epochs: int = 100
     train_steps: int = 100000
     validate_steps: int = 1000
@@ -33,6 +34,7 @@ class QATrainConfig(BaseModel):
     load: bool = False
     seed: int = 0
     save: bool = True
+    save_last: bool = False
     epochs: int = 100
     train_steps: Optional[int] = None
     validate_steps: Optional[int] = None
@@ -61,6 +63,7 @@ class CommonsenseQATrainConfig(BaseModel):
     load: bool = False
     seed: int = 0
     save: bool = True
+    save_last: bool = False
     epochs: int = 5
     train_steps: Optional[int] = None
     validate_steps: Optional[int] = None
@@ -90,6 +93,7 @@ class GLUETrainConfig(BaseModel):
     load: bool = False
     seed: int = 0
     save: bool = True
+    save_last: bool = False
     epochs: int = 3
     train_steps: Optional[int] = None
     batch_size: int = 2

@@ -141,17 +141,17 @@ int main() {
 //    matcher.matchByNodeEmbedding(sourceSentence, targetSentence, sourceMask, targetMask,
 //                                 300, 2, 12,1920301,0.5,0);
 
-    std::vector<int> sourceSentence{2202,2051,1010,2191,5005,1010,2191,2162,1010,2191,3521,1010,2191,24748};
-    std::vector<int> sourceMask{0,1,0,0,1,0,0,1,0,0,1,0,0,1};
-    std::vector<int> targetSentence{2065,2017,2215,9396,1010,2054,2003,2242,2017,2323,3046,2000,2079,2007,1996,2088,1029};
-    std::vector<int> targetMask{0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,1,0};
-    std::vector<std::vector<int>> rankFocus{{2242,2017}};
+    std::vector<int> sourceSentence{3143, 3105, 1010, 4553, 2013, 2169, 2060, 1010, 3102, 4176, 1010, 4929, 16717, 1010, 2831, 2000, 2169, 2060};
+    std::vector<int> sourceMask{1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0, 0, 1};
+    std::vector<int> targetSentence{2054, 2079, 2111, 6614, 2000, 2079, 2012, 2147, 1029};
+    std::vector<int> targetMask{0, 0, 1, 1, 0, 0, 0, 1, 0};
+    //std::vector<std::vector<int>> rankFocus{{2242,2017}};
     KnowledgeMatcher matcher("/data/conceptnet-archive.data");
-//    matcher.matchByNodeEmbedding(sourceSentence, targetSentence, sourceMask, targetMask,
-//                                 300, 2, 12,1920301,0.5,0);
+    matcher.matchByNodeEmbedding(sourceSentence, targetSentence, sourceMask, targetMask,
+                                 300, 3, 12,697474,3,0.5,0.5);
 
-    matcher.matchByToken(sourceSentence, targetSentence, sourceMask, targetMask,
-                                 300, 2, 12,1920301,0.5,0, rankFocus, {});
+//    matcher.matchByToken(sourceSentence, targetSentence, sourceMask, targetMask,
+//                                 300, 2, 12,1920301,3,0.5,0, rankFocus, {});
 
     //    KnowledgeMatcher matcher("/data/conceptnet-archive.data");
 //    matcher.kb.initLandmarks(100, 10, -1, "/data/conceptnet-landmark.cache");

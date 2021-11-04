@@ -84,7 +84,7 @@ def _train(
             + stage_trainer.monitor
             + ":.2f}",
             save_top_k=1 if stage_config.save else 0,
-            save_last=False,
+            save_last=stage_config.save_last,
             monitor=stage_trainer.monitor,
             mode=stage_trainer.monitor_mode,
             verbose=True,

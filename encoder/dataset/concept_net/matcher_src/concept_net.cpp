@@ -188,10 +188,10 @@ ConceptNetReader::read(const std::string &assertionPath, const std::string &weig
                 // Find all matching raw weight names, use their average embedding
                 // If there is no matching, set one element to 1
                 auto sentence = string2Vec(cleaned);
-                auto result = weightNameTrie.matchForAll(sentence);
+                auto result = weightNameTrie.matchForAll(sentence, false);
                 xt::xtensor<float, 1> emb(xt::xtensor<int16_t, 1>::shape_type{dim}, 0);
                 for (auto &item : result) {
-                    size_t rawId = weightNames.at(vec2String(item.second));
+                    size_t rawId = weightNames.at(vec2String(item.second.back()));
                     emb += xt::adapt(weights.get() + rawId * dim, dim, xt::no_ownership(),
                                      vector<size_t>{dim});
                 }

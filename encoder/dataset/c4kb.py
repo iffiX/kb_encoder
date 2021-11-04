@@ -138,8 +138,16 @@ class C4KBDataset:
             sentences, key=lambda x: abs(len(x) / 4 - self.max_seq_length)
         )
         selected_sentence = selected_sentences[0]
+        selected_index = sentences.index(selected_sentence)
+        # Finds the nearest sentence
+        if selected_index == len(sentences) - 1:
+            target_index = selected_index - 1
+        else:
+            target_index = selected_index + 1
         selected_target_sentence = (
-            selected_sentence if len(selected_sentences) < 2 else selected_sentences[1]
+            selected_sentence
+            if len(selected_sentences) < 2
+            else sentences[target_index]
         )
 
         match = self.matcher.match_by_node_embedding(
