@@ -54,12 +54,18 @@ class StaticIterableDataset(Dataset):
 
 class DynamicIterableDataset(IterableDataset):
     def __init__(
-        self, generator: Callable[..., Dict[str, t.Tensor]], generator_args: tuple = (),
+        self,
+        generator: Callable[..., Dict[str, t.Tensor]],
+        generator_args: tuple = (),
+        seed_setter: Callable[..., None] = None,
     ):
         self.generator = generator
         self.generator_args = generator_args
+        self.seed_setter = seed_setter
 
     def __iter__(self):
+        if self.seed_setter is not None:
+            self.seed_setter()
         return self
 
     def __next__(self):
@@ -88,7 +94,7 @@ class MovableList(list):
 
 def collate_function_dict_to_batch_encoding(
     samples: List[Union[BatchEncoding, Dict[str, Any]]]
-):
+) -> BatchEncoding:
     assert isinstance(samples, list)
     assert len(samples) > 0
     keys = set(samples[0].keys())

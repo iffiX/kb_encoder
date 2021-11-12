@@ -30,11 +30,15 @@ metrics_cache_dir = str(
 preprocess_cache_dir = str(
     os.path.abspath(os.path.join(ROOT, "data", "preprocess"))
 )  # type: str
+inspect_data_dir = str(
+    os.path.abspath(os.path.join(ROOT, "data", "inspect"))
+)  # type: str
 mongo_config = {
     "is_docker": False,
     "mongo_local_path": str(os.path.abspath(os.path.join(ROOT, "data", "mongo"))),
 }
 preprocess_worker_num = 16
+enable_inspect = True
 
 
 def reset():

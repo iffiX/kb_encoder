@@ -1,0 +1,40 @@
+{
+    "configs": [
+        {
+            "task_trainer_config": {
+                "accumulate_grad_batches": 16,
+                "base_type": "t5-base",
+                "batch_size": 2,
+                "epochs": 30,
+                "load_worker_num": 8,
+                "load_prefetch_per_worker": 16,
+                "l2_regularization": 0,
+                "learning_rate": 1e-4,
+                "load": false,
+                "max_seq_length": 200,
+                "generate_length": 16,
+                "optimizer_class": "Adafactor",
+                "use_matcher": false,
+                "seed": 697474,
+                "save": false
+            },
+            "task_trainer_stage": "commonsense_qa",
+            "kb_trainer_checkpoint": "",
+            "kb_trainer_stage": "none",
+            "attr_steps": 2,
+            "attr_threshold": 0.35,
+            "attr_warmup_epochs": 2,
+            "attr_epoch_interval": 1,
+            "attr_process_batch_size": 8,
+            "matcher_max_times": 300,
+            "matcher_max_depth": 2,
+            "matcher_max_edges": 16,
+            "matcher_seed": 1481652,
+            "matcher_discard_edges_if_similarity_below": 0.45
+        }
+    ],
+    "early_stopping_patience": 10,
+    "gpus": [0],
+    "stages": ["iter"],
+    "working_directory": "/home/muhan/data/workspace/kb_encoder/train_iter_comm_qa_t5_base_match"
+}

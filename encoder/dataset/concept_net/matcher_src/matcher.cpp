@@ -825,7 +825,7 @@ KnowledgeMatcher::matchByNode(const vector<int> &sourceSentence,
                               const vector<int> &sourceMask,
                               const vector<int> &targetMask,
                               int maxTimes, int maxDepth, int maxEdges, int seed,
-                              int edgeBeamWidth,
+                              int edgeBeamWidth, bool trim,
                               float discardEdgesIfSimilarityBelow,
                               float discardEdgesIfRankBelow) const {
 
@@ -965,13 +965,17 @@ KnowledgeMatcher::matchByNode(const vector<int> &sourceSentence,
                     float simTmp = -1, simToEachTarget;
                     long simTmpTarget = -1;
                     for (auto &tNode : targetNodes) {
-                        auto simPair = make_pair(tNode.first, otherNodeId);
-                        if (similarityCache.find(simPair) == similarityCache.end()) {
-                            simToEachTarget = 1.0f / (kb.distance(tNode.first, otherNodeId) + 1e-1);
-                            similarityCache[simPair] = simToEachTarget;
-                        } else {
-                            simToEachTarget = similarityCache.at(simPair);
+                        if (rootNode != tNode.first) {
+                            auto simPair = make_pair(tNode.first, otherNodeId);
+                            if (similarityCache.find(simPair) == similarityCache.end()) {
+                                simToEachTarget = 1.0f / (kb.distance(tNode.first, otherNodeId) + 1e-1);
+                                similarityCache[simPair] = simToEachTarget;
+                            } else {
+                                simToEachTarget = similarityCache.at(simPair);
+                            }
                         }
+                        else
+                            simToEachTarget = 0;
                         if (simToEachTarget > simTmp) {
                             simTmpTarget = tNode.first;
                             simTmp = simToEachTarget;
@@ -1022,11 +1026,9 @@ KnowledgeMatcher::matchByNode(const vector<int> &sourceSentence,
             cout << "Annotation: " << edgeToStringAnnotation(selectedEdgeIndex) << endl;
             cout << "--------------------------------------------------------------------------------" << endl;
 #endif
-            // break on reaching one of the target nodes
-            if (targetNodes.find(currentNode) != targetNodes.end())
-                break;
         }
-        trimPath(path);
+        if (trim)
+            trimPath(path);
 #ifdef DEBUG_DECISION
         cout << "================================================================================" << endl;
 #endif
@@ -1043,7 +1045,7 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
                                        const vector<int> &sourceMask,
                                        const vector<int> &targetMask,
                                        int maxTimes, int maxDepth, int maxEdges, int seed,
-                                       int edgeBeamWidth,
+                                       int edgeBeamWidth, bool trim,
                                        float discardEdgesIfSimilarityBelow,
                                        float discardEdgesIfRankBelow) const {
     if (kb.nodeEmbeddingFileName.empty() or kb.nodeEmbeddingFile == nullptr)
@@ -1184,13 +1186,17 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
                     float simTmp = -1, simToEachTarget;
                     long simTmpTarget = -1;
                     for (auto &tNode : targetNodes) {
-                        auto simPair = make_pair(tNode.first, otherNodeId);
-                        if (similarityCache.find(simPair) == similarityCache.end()) {
-                            simToEachTarget = kb.cosineSimilarity(otherNodeId, tNode.first);
-                            similarityCache[simPair] = simToEachTarget;
-                        } else {
-                            simToEachTarget = similarityCache.at(simPair);
+                        if (rootNode != tNode.first) {
+                            auto simPair = make_pair(tNode.first, otherNodeId);
+                            if (similarityCache.find(simPair) == similarityCache.end()) {
+                                simToEachTarget = kb.cosineSimilarity(otherNodeId, tNode.first);
+                                similarityCache[simPair] = simToEachTarget;
+                            } else {
+                                simToEachTarget = similarityCache.at(simPair);
+                            }
                         }
+                        else
+                            simToEachTarget = 0;
                         if (simToEachTarget > simTmp) {
                             simTmpTarget = tNode.first;
                             simTmp = simToEachTarget;
@@ -1241,11 +1247,9 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
             cout << "Annotation: " << edgeToStringAnnotation(selectedEdgeIndex) << endl;
             cout << "--------------------------------------------------------------------------------" << endl;
 #endif
-            // break on reaching one of the target nodes
-            if (targetNodes.find(currentNode) != targetNodes.end())
-                break;
         }
-        trimPath(path);
+        if (trim)
+            trimPath(path);
 #ifdef DEBUG_DECISION
         cout << "================================================================================" << endl;
 #endif
@@ -1262,7 +1266,7 @@ KnowledgeMatcher::matchByToken(const vector<int> &sourceSentence,
                                const vector<int> &sourceMask,
                                const vector<int> &targetMask,
                                int maxTimes, int maxDepth, int maxEdges, int seed,
-                               int edgeBeamWidth,
+                               int edgeBeamWidth, bool trim,
                                float discardEdgesIfSimilarityBelow,
                                float discardEdgesIfRankBelow,
                                const vector<vector<int>> &rankFocus,
@@ -1468,11 +1472,9 @@ KnowledgeMatcher::matchByToken(const vector<int> &sourceSentence,
             cout << "Annotation: " << edgeToStringAnnotation(selectedEdgeIndex) << endl;
             cout << "--------------------------------------------------------------------------------" << endl;
 #endif
-            // break on reaching one of the target nodes
-            if (targetNodes.find(currentNode) != targetNodes.end())
-                break;
         }
-        trimPath(path);
+        if (trim)
+            trimPath(path);
 #ifdef DEBUG_DECISION
         cout << "================================================================================" << endl;
 #endif
@@ -1594,12 +1596,18 @@ void KnowledgeMatcher::matchForSourceAndTarget(const vector<int> &sourceSentence
     unordered_map<size_t, vector<vector<int>>> sourceMatches = nodeTrie.matchForAll(sourceSentence, false);
     if (not sourceMask.empty()) {
         for (auto &matches : sourceMatches) {
-            // Check if the posision is masked,
-            if (sourceMask[matches.first] == 0) {
+            // Check if there exists any not masked position
+            bool allMasked = true;
+            for(size_t i = 0; i < matches.second.back().size(); i++) {
+                if (sourceMask[matches.first + i] == 1) {
+                    allMasked = false;
+                }
+            }
+            if (allMasked) {
 #ifdef DEBUG
-                for (auto &match : matches.second)
-                    cout << fmt::format("Removing match [{}]@{} in source sentence",
-                                        fmt::join(match.begin(), match.end(), ","), matches.first) << endl;
+                cout << fmt::format("Removing match [{}]@{} in source sentence",
+                                    fmt::join(matches.second.back().begin(),
+                                              matches.second.back().end(), ","), matches.first) << endl;
 #endif
             } else
                 sourceMatch.emplace(matches.first, matches.second.back()); // Insert longest
@@ -1614,12 +1622,18 @@ void KnowledgeMatcher::matchForSourceAndTarget(const vector<int> &sourceSentence
         unordered_map<size_t, vector<vector<int>>> targetMatches = nodeTrie.matchForAll(targetSentence, false);
         if (not targetMask.empty()) {
             for (auto &matches : targetMatches) {
-                // Check if the posision is masked,
-                if (targetMask[matches.first] == 0) {
+                // Check if there exists any not masked position
+                bool allMasked = true;
+                for(size_t i = 0; i < matches.second.back().size(); i++) {
+                    if (targetMask[matches.first + i] == 1) {
+                        allMasked = false;
+                    }
+                }
+                if (allMasked) {
 #ifdef DEBUG
-                    for (auto &match : matches.second)
-                        cout << fmt::format("Removing match [{}]@{} in target sentence",
-                                            fmt::join(match.begin(), match.end(), ","), matches.first) << endl;
+                    cout << fmt::format("Removing match [{}]@{} in target sentence",
+                                        fmt::join(matches.second.back().begin(),
+                                                  matches.second.back().end(), ","), matches.first) << endl;
 #endif
                 } else
                     targetMatch.emplace(matches.first, matches.second.back()); // Insert longest
@@ -1715,9 +1729,9 @@ KnowledgeMatcher::selectPaths(VisitedSubGraph &visitedSubGraph,
                                     kb.relationships[get<1>(addEdge)], get<1>(addEdge),
                                     kb.nodes[get<2>(addEdge)], get<2>(addEdge),
                                     edgeToStringAnnotation(addEdgeIndex),
-                                    path.similarities[addEdgeIndex],
+                                    path.similarities.at(addEdgeIndex),
                                     kb.nodes[path.similarityTargets[addEdgeIndex]],
-                                    path.similarityTargets[addEdgeIndex]) << endl;
+                                    path.similarityTargets.at(addEdgeIndex)) << endl;
             else
                 cout << fmt::format("{}: [{}:{}] --[{}:{}]--> [{}:{}], annotation [{}], "
                                     "similarity {}",
@@ -1726,7 +1740,7 @@ KnowledgeMatcher::selectPaths(VisitedSubGraph &visitedSubGraph,
                                     kb.relationships[get<1>(addEdge)], get<1>(addEdge),
                                     kb.nodes[get<2>(addEdge)], get<2>(addEdge),
                                     edgeToStringAnnotation(addEdgeIndex),
-                                    path.similarities[addEdgeIndex]) << endl;
+                                    path.similarities.at(addEdgeIndex)) << endl;
         }
         cout << "********************************************************************************" << endl;
 #endif
@@ -1749,6 +1763,7 @@ KnowledgeMatcher::selectPaths(VisitedSubGraph &visitedSubGraph,
             size_t startPos = posRef.at(nodeSubGraph.first).first, endPos = posRef.at(nodeSubGraph.first).second;
             get<0>(result[endPos]) = startPos;
             get<1>(result[endPos]).emplace_back(edgeToAnnotation(edgeIndex));
+            get<2>(result[endPos]).emplace_back(get<3>(kb.edges[edgeIndex]));
         }
     }
 #ifdef DEBUG
@@ -1763,7 +1778,7 @@ void KnowledgeMatcher::trimPath(VisitedPath &path) const {
     size_t trimPosition = 0;
     for (size_t i = 0; i < path.edges.size(); i++) {
         float similarity = path.similarities.at(path.edges[i]);
-        if (similarity > path.bestSimilarity) {
+        if (similarity >= path.bestSimilarity) {
             path.bestSimilarity = similarity;
             path.bestSimilarityTarget = path.similarityTargets.at(path.edges[i]);
             trimPosition = i + 1;
@@ -1796,14 +1811,14 @@ void KnowledgeMatcher::updatePath(VisitedPath &path,
         if ((coveredNodePairs.find(make_pair(srcId, tarId)) == coveredNodePairs.end()) &&
             (coveredNodePairs.find(make_pair(tarId, srcId)) == coveredNodePairs.end())) {
             uncoveredEdges.emplace_back(uEdge);
-            if (path.similarities[uEdge] > bestSimilarity) {
-                auto pair = make_pair(path.root, path.similarityTargets[uEdge]);
+            if (path.similarities.at(uEdge) * focusMultiplier > bestSimilarity) {
+                auto pair = make_pair(path.root, path.similarityTargets.at(uEdge));
                 bool isBetterThanCurrent = (
                         sourceToTargetSimilarity.find(pair) == sourceToTargetSimilarity.end() ||
-                        sourceToTargetSimilarity.at(pair) < path.similarities[uEdge] * focusMultiplier);
-                if (path.similarityTargets[uEdge] == -1 || isBetterThanCurrent) {
-                    bestSimilarity = path.similarities[uEdge] * focusMultiplier;
-                    bestSimilarityTarget = path.similarityTargets[uEdge];
+                        sourceToTargetSimilarity.at(pair) < path.similarities.at(uEdge) * focusMultiplier);
+                if (isBetterThanCurrent) {
+                    bestSimilarity = path.similarities.at(uEdge) * focusMultiplier;
+                    bestSimilarityTarget = path.similarityTargets.at(uEdge);
                 }
             }
             remainingEdges--;

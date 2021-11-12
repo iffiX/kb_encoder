@@ -128,9 +128,13 @@ class IterTrainConfig(BaseModel):
     task_trainer_stage: str
     kb_trainer_checkpoint: str
     kb_trainer_stage: str
-    attr_steps: int = 1
-    attr_threshold: float = 0.3
+    train_attr: bool = False
+    attr_file_path: str = None
+    attr_steps: int = 2
+    attr_threshold: float = 0.35
+    attr_warmup_epochs: int = 0
     attr_epoch_interval: int = 1
+    attr_process_batch_size: int = 1
     matcher_max_times: int = 300
     matcher_max_depth: int = 2
     matcher_max_edges: int = 12

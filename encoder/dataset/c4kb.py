@@ -1,9 +1,10 @@
 import os
 import random
 import string
+import logging
 import nltk
 import torch as t
-from typing import List
+from collections import Counter
 from datasets import (
     load_dataset,
     DownloadConfig,
@@ -58,29 +59,23 @@ class C4KBDataset:
         nltk.download("stopwords")
         nltk.download("punkt")
         self.stopwords = set(stopwords.words("english") + list(string.punctuation))
-        worker_info = get_worker_info()
-        if worker_info is not None:
-            worker_id = worker_info.id
-        else:
-            worker_id = 0
 
-        self.rnd = random.Random(c4_seed + worker_id)
+        self.rnd = random.Random(c4_seed)
+        self.c4_seed = c4_seed
         self.train_data = iter(
-            self.dataset["train"].shuffle(buffer_size=10000, seed=c4_seed + worker_id)
+            self.dataset["train"].shuffle(buffer_size=10000, seed=c4_seed)
         )
         self.validate_data = iter(
-            self.dataset["validation"].shuffle(
-                buffer_size=10000, seed=c4_seed + worker_id
-            )
+            self.dataset["validation"].shuffle(buffer_size=10000, seed=c4_seed)
         )
 
     @property
     def train_dataset(self):
-        return DynamicIterableDataset(self.generator, ("train",),)
+        return DynamicIterableDataset(self.generator, ("train",), self.seed_setter)
 
     @property
     def validate_dataset(self):
-        return DynamicIterableDataset(self.generator, ("validate",))
+        return DynamicIterableDataset(self.generator, ("validate",), self.seed_setter)
 
     def validate(self, batch: BatchEncoding, tokens: t.Tensor):
         total = tokens.shape[0]
@@ -106,11 +101,25 @@ class C4KBDataset:
                 if start != -1:
                     end = answer.find("<", start + len(start_marker))
                     offset = end
-                    knowledge = self.get_word_set(answer[start:end])
-                    ref_knowledge = self.get_word_set(batch["knowledge_list"][i][j])
-                    shared_words = knowledge.intersection(ref_knowledge)
-                    precision = len(shared_words) / len(knowledge)
-                    recall = len(shared_words) / len(ref_knowledge)
+                    knowledge, kn_len = self.get_word_count(
+                        answer[start:end].strip(start_marker)
+                    )
+                    ref_knowledge, ref_kn_len = self.get_word_count(
+                        batch["knowledge_list"][i][j]
+                    )
+                    shared_words = set(knowledge.keys()).intersection(
+                        set(ref_knowledge.keys())
+                    )
+                    if kn_len == 0:
+                        precision = 0
+                    else:
+                        precision = sum(knowledge[sw] for sw in shared_words) / kn_len
+                    if ref_kn_len == 0:
+                        recall = 0
+                    else:
+                        recall = (
+                            sum(ref_knowledge[sw] for sw in shared_words) / ref_kn_len
+                        )
                     em_per_sample += (
                         2 * precision * recall / (precision + recall + 1e-6)
                     )
@@ -121,10 +130,31 @@ class C4KBDataset:
                 em_total += em_per_sample
         return {"EM": em_total / total}
 
-    def get_word_set(self, sentence: str):
-        return set(
-            i for i in word_tokenize(sentence.lower()) if i not in self.stopwords
+    def seed_setter(self):
+        worker_info = get_worker_info()
+        if worker_info is not None:
+            worker_id = worker_info.id
+        else:
+            worker_id = 0
+
+        self.rnd = random.Random(self.c4_seed + worker_id)
+        self.train_data = iter(
+            self.dataset["train"].shuffle(
+                buffer_size=10000, seed=self.c4_seed + worker_id
+            )
         )
+        logging.info(f"C4 seed on worker {worker_id}: {self.c4_seed + worker_id}")
+        self.validate_data = iter(
+            self.dataset["validation"].shuffle(
+                buffer_size=10000, seed=self.c4_seed + worker_id
+            )
+        )
+
+    def get_word_count(self, sentence: str):
+        word_list = [
+            i for i in word_tokenize(sentence.lower()) if i not in self.stopwords
+        ]
+        return Counter(word_list), len(word_list)
 
     def generator(self, split: str):
         if split == "train":
@@ -135,7 +165,7 @@ class C4KBDataset:
         # Rank sentence by their approximate length distance to the optimal input length
         # T5 usually has 1/4 the number of tokens of total text length
         selected_sentences = sorted(
-            sentences, key=lambda x: abs(len(x) / 4 - self.max_seq_length)
+            sentences, key=lambda x: abs(len(x) / 4 - self.max_seq_length / 2)
         )
         selected_sentence = selected_sentences[0]
         selected_index = sentences.index(selected_sentence)
@@ -176,6 +206,7 @@ class C4KBDataset:
 
         encoded_input = self.tokenizer(
             input,
+            selected_target_sentence,
             padding="max_length",
             max_length=self.max_seq_length,
             truncation=True,

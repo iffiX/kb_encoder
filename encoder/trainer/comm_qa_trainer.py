@@ -10,6 +10,11 @@ from ..dataset.base import collate_function_dict_to_batch_encoding, dict_iter
 from encoder.dataset.commonsense_qa import CommonsenseQADataset
 from ..utils.config import CommonsenseQATrainConfig
 from ..utils.settings import proxies, model_cache_dir, huggingface_mirror
+from ..utils.adafactor import Adafactor
+
+
+def set_worker_sharing_strategy(worker_id: int) -> None:
+    t.multiprocessing.set_sharing_strategy("file_system")
 
 
 class CommonsenseQATrainer(pl.LightningModule):
@@ -68,6 +73,7 @@ class CommonsenseQATrainer(pl.LightningModule):
             prefetch_factor=self.config.load_prefetch_per_worker,
             batch_size=self.config.batch_size,
             collate_fn=collate_function_dict_to_batch_encoding,
+            worker_init_fn=set_worker_sharing_strategy,
         )
 
     def val_dataloader(self):
@@ -77,6 +83,7 @@ class CommonsenseQATrainer(pl.LightningModule):
             prefetch_factor=self.config.load_prefetch_per_worker,
             batch_size=self.config.batch_size,
             collate_fn=collate_function_dict_to_batch_encoding,
+            worker_init_fn=set_worker_sharing_strategy,
         )
 
     def test_dataloader(self):
@@ -86,6 +93,7 @@ class CommonsenseQATrainer(pl.LightningModule):
             prefetch_factor=self.config.load_prefetch_per_worker,
             batch_size=self.config.batch_size,
             collate_fn=collate_function_dict_to_batch_encoding,
+            worker_init_fn=set_worker_sharing_strategy,
         )
 
     def on_fit_start(self):
@@ -101,16 +109,16 @@ class CommonsenseQATrainer(pl.LightningModule):
             self.real_device = f"cuda:{start_device_id}"
             self.model.parallelize(self.config.device_map)
         else:
-            self.real_device = self.device
+            self.real_device = None
 
     # noinspection PyTypeChecker
     def training_step(self, batch: BatchEncoding, batch_idx):
         # answer shape [batch_size, sequence_length]
-        input_ids = batch["sentence"].to(self.real_device)
+        input_ids = batch["sentence"].to(self.real_device or self.device)
         out = self.model(
             input_ids=input_ids,
-            attention_mask=batch["mask"].to(self.real_device),
-            labels=batch["answer"].to(self.real_device),
+            attention_mask=batch["mask"].to(self.real_device or self.device),
+            labels=batch["answer"].to(self.real_device or self.device),
         )
         # for i in range(out.logits.shape[0]):
         #     print(self.tokenizer.decode(input_ids[i]))
@@ -126,9 +134,9 @@ class CommonsenseQATrainer(pl.LightningModule):
     # noinspection PyTypeChecker
     def validation_step(self, batch: BatchEncoding, _batch_idx):
         out = self.model.generate(
-            batch["sentence"].to(self.real_device),
+            batch["sentence"].to(self.real_device or self.device),
             max_length=self.config.generate_length,
-            attention_mask=batch["mask"].to(self.real_device),
+            attention_mask=batch["mask"].to(self.real_device or self.device),
             early_stopping=True,
         )
         result = t.full(
@@ -143,7 +151,7 @@ class CommonsenseQATrainer(pl.LightningModule):
 
     def validation_epoch_end(self, outputs):
         if self.is_distributed:
-            t.cuda.set_device(self.real_device)
+            t.cuda.set_device(self.real_device or self.device)
             gathered_outputs = [None] * get_world_size()
             all_gather_object(gathered_outputs, outputs)
             gathered_outputs = list(itertools.chain.from_iterable(gathered_outputs))
@@ -163,9 +171,9 @@ class CommonsenseQATrainer(pl.LightningModule):
 
     def test_step(self, batch: BatchEncoding, _batch_idx):
         out = self.model.generate(
-            batch["sentence"].to(self.real_device),
+            batch["sentence"].to(self.real_device or self.device),
             max_length=self.config.generate_length,
-            attention_mask=batch["mask"].to(self.real_device),
+            attention_mask=batch["mask"].to(self.real_device or self.device),
             early_stopping=True,
         )
         result = t.full(
@@ -180,7 +188,7 @@ class CommonsenseQATrainer(pl.LightningModule):
 
     def test_epoch_end(self, outputs):
         if self.is_distributed:
-            t.cuda.set_device(self.real_device)
+            t.cuda.set_device(self.real_device or self.device)
             gathered_outputs = [None] * get_world_size()
             all_gather_object(gathered_outputs, outputs)
             gathered_outputs = list(itertools.chain.from_iterable(gathered_outputs))
@@ -194,11 +202,31 @@ class CommonsenseQATrainer(pl.LightningModule):
         self.dataset.generate_test_results_tokens(tokens, self.stage_result_path)
 
     def configure_optimizers(self):
-        optim_cls = getattr(t.optim, self.config.optimizer_class)
-        return optim_cls(
-            self.parameters(),
-            lr=self.config.learning_rate,
-            weight_decay=self.config.l2_regularization,
+        if self.config.optimizer_class == "Adafactor":
+            optim = Adafactor(
+                self.parameters(),
+                lr=self.config.learning_rate,
+                weight_decay=self.config.l2_regularization,
+            )
+        else:
+            optim_cls = getattr(t.optim, self.config.optimizer_class)
+            optim = optim_cls(
+                self.parameters(),
+                lr=self.config.learning_rate,
+                weight_decay=self.config.l2_regularization,
+            )
+        sch = t.optim.lr_scheduler.ReduceLROnPlateau(
+            optim, mode="max", factor=0.3, patience=0, min_lr=1e-6, verbose=True
+        )
+        return (
+            [optim],
+            [
+                {
+                    # REQUIRED: The scheduler instance
+                    "scheduler": sch,
+                    "monitor": "accuracy",
+                }
+            ],
         )
 
     @staticmethod

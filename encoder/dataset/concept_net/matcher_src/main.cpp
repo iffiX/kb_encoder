@@ -141,14 +141,19 @@ int main() {
 //    matcher.matchByNodeEmbedding(sourceSentence, targetSentence, sourceMask, targetMask,
 //                                 300, 2, 12,1920301,0.5,0);
 
-    std::vector<int> sourceSentence{3143, 3105, 1010, 4553, 2013, 2169, 2060, 1010, 3102, 4176, 1010, 4929, 16717, 1010, 2831, 2000, 2169, 2060};
-    std::vector<int> sourceMask{1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0, 0, 1};
-    std::vector<int> targetSentence{2054, 2079, 2111, 6614, 2000, 2079, 2012, 2147, 1029};
-    std::vector<int> targetMask{0, 0, 1, 1, 0, 0, 0, 1, 0};
+    std::vector<int> sourceSentence{2924,1010,3075,1010,2533,3573,1010,6670,1010,2047,2259};
+    std::vector<int> sourceMask{1,0,1,0,1,1,0,1,0,1,1};
+    std::vector<int> targetSentence{1037,24135,2341,2003,14057,2005,2048,3257,3604,1010,2021,2009,2036,4240,2004,1037,3036,5468,2012,1037,2054,1029};
+    std::vector<int> targetMask{0,1,1,0,1,0,0,1,1,0,0,0,1,1,0,0,1,1,0,0,0,0};
     //std::vector<std::vector<int>> rankFocus{{2242,2017}};
-    KnowledgeMatcher matcher("/data/conceptnet-archive.data");
+    KnowledgeMatcher matcher("/home/muhan/data/workspace/kb_encoder/data/preprocess/conceptnet-archive.data");
+    KnowledgeMatcher matcher2("/home/muhan/data/workspace/kb_encoder/data/preprocess/conceptnet-archive.data");
+
     matcher.matchByNodeEmbedding(sourceSentence, targetSentence, sourceMask, targetMask,
-                                 300, 3, 12,697474,3,0.5,0.5);
+                                  300, 3, 12,697474,-1,0.5,0);
+
+    matcher2.matchByNodeEmbedding(sourceSentence, targetSentence, sourceMask, targetMask,
+                                 300, 3, 12,697474,-1,0.5,0);
 
 //    matcher.matchByToken(sourceSentence, targetSentence, sourceMask, targetMask,
 //                                 300, 2, 12,1920301,3,0.5,0, rankFocus, {});

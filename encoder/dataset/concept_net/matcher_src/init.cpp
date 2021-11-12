@@ -7,7 +7,7 @@
 #include "fmt/format.h"
 #include <omp.h>
 
-#define ENABLE_DEBUG
+///#define ENABLE_DEBUG
 #ifdef ENABLE_DEBUG
 
 #include <execinfo.h>
@@ -99,7 +99,7 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("target_mask") = std::vector<int>{},
                  py::arg("max_times") = 100, py::arg("max_depth") = 3,
                  py::arg("max_edges") = 10, py::arg("seed") = -1,
-                 py::arg("edge_beam_width") = -1,
+                 py::arg("edge_beam_width") = -1, py::arg("trim_path") = true,
                  py::arg("discard_edges_if_similarity_below") = 0,
                  py::arg("discard_edges_if_rank_below") = 0)
             .def("match_by_node_embedding", &KnowledgeMatcher::matchByNodeEmbedding,
@@ -109,7 +109,7 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("target_mask") = std::vector<int>{},
                  py::arg("max_times") = 100, py::arg("max_depth") = 3,
                  py::arg("max_edges") = 10, py::arg("seed") = -1,
-                 py::arg("edge_beam_width") = -1,
+                 py::arg("edge_beam_width") = -1, py::arg("trim_path") = true,
                  py::arg("discard_edges_if_similarity_below") = 0.5,
                  py::arg("discard_edges_if_rank_below") = 0)
             .def("match_by_token", &KnowledgeMatcher::matchByToken,
@@ -119,7 +119,7 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("target_mask") = std::vector<int>{},
                  py::arg("max_times") = 100, py::arg("max_depth") = 3,
                  py::arg("max_edges") = 10, py::arg("seed") = -1,
-                 py::arg("edge_beam_width") = -1,
+                 py::arg("edge_beam_width") = -1, py::arg("trim_path") = true,
                  py::arg("discard_edges_if_similarity_below") = 0,
                  py::arg("discard_edges_if_rank_below") = 0,
                  py::arg("rank_focus") = std::vector<std::vector<int>>{},

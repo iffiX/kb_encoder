@@ -43,7 +43,6 @@ if build:
             _src_path,
             "-B",
             _build_path,
-            "-DCMAKE_BUILD_TYPE=Release",
         ]
     )
     subprocess.call(["make", "-C", _build_path, "clean"])
@@ -146,8 +145,8 @@ class ConceptNetMatcher:
         source_mask: str = "",
         target_mask: str = "",
         seed: int = -1,
-    ):
-        result_1 = self.match_by_node_embedding(
+    ) -> Dict[int, Tuple[int, List[List[int]], List[float]]]:
+        match_1 = self.match_by_node_embedding(
             source_sentence,
             target_sentence=target_sentence,
             source_mask=source_mask,
@@ -159,7 +158,7 @@ class ConceptNetMatcher:
             discard_edges_if_similarity_below=0.5,
             seed=seed,
         )
-        result_2 = self.match_by_token(
+        match_2 = self.match_by_token(
             source_sentence,
             target_sentence=target_sentence,
             source_mask=source_mask,
@@ -170,21 +169,7 @@ class ConceptNetMatcher:
             edge_beam_width=3,
             seed=seed,
         )
-        set_1 = {(k, v[0]): {tuple(vv) for vv in v[1]} for k, v in result_1.items()}
-        set_2 = {(k, v[0]): {tuple(vv) for vv in v[1]} for k, v in result_2.items()}
-        final_set = {}
-        # print("Result of match by embedding")
-        # print(self.insert_match(source_sentence, result_1))
-        # print("")
-        # print("Result of match by token:")
-        # print(self.insert_match(source_sentence, result_2))
-        # print("")
-        for match_pos, triples in set_1.items():
-            if match_pos in set_2:
-                # final_triples = triples.intersection(set_2[match_pos])
-                final_triples = triples.union(set_2[match_pos])
-                final_set[match_pos] = final_triples
-        return {mp[0]: (mp[1], list(triples)) for mp, triples in final_set.items()}
+        return self.unify_match([match_1, match_2])
 
     def match_by_node(
         self,
@@ -197,12 +182,13 @@ class ConceptNetMatcher:
         max_edges: int = 3,
         seed: int = -1,
         edge_beam_width: int = -1,
+        trim_path: bool = True,
         discard_edges_if_similarity_below: float = 0,
         discard_edges_if_rank_below: float = 0,
-    ) -> Dict[int, Tuple[int, List[List[int]]]]:
+    ) -> Dict[int, Tuple[int, List[List[int]], List[float]]]:
         """
         Returns:
-            Dict[end position, Tuple[start position, vector of knowledge sequences]]
+            Dict[end position, Tuple[start position, vector of knowledge sequences, vector of weights]]
             end position is the index of the word behind the match
             start position is the index of the first word in the match
         """
@@ -237,6 +223,7 @@ class ConceptNetMatcher:
             max_edges=max_edges,
             seed=seed,
             edge_beam_width=edge_beam_width,
+            trim_path=trim_path,
             discard_edges_if_similarity_below=discard_edges_if_similarity_below,
             discard_edges_if_rank_below=discard_edges_if_rank_below,
         )
@@ -253,12 +240,13 @@ class ConceptNetMatcher:
         max_edges: int = 3,
         seed: int = -1,
         edge_beam_width: int = -1,
+        trim_path: bool = True,
         discard_edges_if_similarity_below: float = 0.5,
         discard_edges_if_rank_below: float = 0,
-    ) -> Dict[int, Tuple[int, List[List[int]]]]:
+    ) -> Dict[int, Tuple[int, List[List[int]], List[float]]]:
         """
         Returns:
-            Dict[end position, Tuple[start position, vector of knowledge sequences]]
+            Dict[end position, Tuple[start position, vector of knowledge sequences, vector of weights]]
             end position is the index of the word behind the match
             start position is the index of the first word in the match
         """
@@ -282,6 +270,7 @@ class ConceptNetMatcher:
             max_edges=max_edges,
             seed=seed,
             edge_beam_width=edge_beam_width,
+            trim_path=trim_path,
             discard_edges_if_similarity_below=discard_edges_if_similarity_below,
             discard_edges_if_rank_below=discard_edges_if_rank_below,
         )
@@ -298,14 +287,15 @@ class ConceptNetMatcher:
         max_edges: int = 3,
         seed: int = -1,
         edge_beam_width: int = -1,
+        trim_path: bool = True,
         discard_edges_if_similarity_below: float = 0,
         discard_edges_if_rank_below: float = 0,
         rank_focus: List[str] = None,
         rank_exclude: List[str] = None,
-    ) -> Dict[int, Tuple[int, List[List[int]]]]:
+    ) -> Dict[int, Tuple[int, List[List[int]], List[float]]]:
         """
         Returns:
-            Dict[end position, Tuple[start position, vector of knowledge sequences]]
+            Dict[end position, Tuple[start position, vector of knowledge sequences, vector of weights]]
             end position is the index of the word behind the match
             start position is the index of the first word in the match
         """
@@ -329,6 +319,7 @@ class ConceptNetMatcher:
             max_edges=max_edges,
             seed=seed,
             edge_beam_width=edge_beam_width,
+            trim_path=trim_path,
             discard_edges_if_similarity_below=discard_edges_if_similarity_below,
             discard_edges_if_rank_below=discard_edges_if_rank_below,
             rank_focus=self.tokenizer(rank_focus, add_special_tokens=False).input_ids
@@ -343,7 +334,7 @@ class ConceptNetMatcher:
         return result
 
     def match_to_string(
-        self, sentence: str, matches: Dict[int, Tuple[int, List[List[int]]]]
+        self, sentence: str, match: Dict[int, Tuple[int, List[List[int]], List[float]]]
     ) -> Tuple[str, List[Tuple[str, List[str]]]]:
         """
         Returns:
@@ -352,9 +343,9 @@ class ConceptNetMatcher:
                 1. Sentence piece before knowledge sequences to be inserted,
                 2. List of knowledge sequences
         """
-        sentence_tokens = self.tokenizer.encode(sentence, add_special_tokens=False)
+        sentence_tokens, _ = self.tokenize_and_mask(sentence)
         sorted_matches = list(
-            (k, v) for k, (_, v) in matches.items()
+            (k, v) for k, (_, v, __) in match.items()
         )  # type: List[Tuple[int, List[str]]]
         sorted_matches = sorted(sorted_matches, key=lambda x: x[0])
         start = 0
@@ -369,30 +360,54 @@ class ConceptNetMatcher:
             start = m[0]
         return self.tokenizer.decode(sentence_tokens[start:]), result
 
+    def unify_match(
+        self, matches: List[Dict[int, Tuple[int, List[List[int]], List[float]]]]
+    ) -> Dict[int, Tuple[int, List[List[int]], List[float]]]:
+        result = {}
+        existed_knowledge = set()
+        for m in matches:
+            for end_pos, (start_pos, knowledge_list, weights) in m.items():
+                if end_pos not in result:
+                    result[end_pos] = (start_pos, [], [])
+                if result[end_pos][0] != start_pos:
+                    raise ValueError("Start pos mismatch")
+                for knowledge, weight in zip(knowledge_list, weights):
+                    if tuple(knowledge) not in existed_knowledge:
+                        result[end_pos][1].append(knowledge)
+                        result[end_pos][2].append(weight)
+                        existed_knowledge.add(tuple(knowledge))
+        return result
+
     def insert_match(
         self,
         sentence: str,
-        matches: Dict[int, Tuple[int, List[List[int]]]],
+        match: Dict[int, Tuple[int, List[List[int]], List[float]]],
         match_begin: str = "(",
         match_sep: str = ",",
         match_end: str = ")",
         insert_at_end: bool = False,
+        include_weights: bool = False,
     ) -> str:
         """
         If the triples are directly inserted at the end, accuracy
         reduced by more than 50%
         """
-        sentence_tokens = self.tokenizer.encode(sentence, add_special_tokens=False)
+        sentence_tokens, _ = self.tokenize_and_mask(sentence)
         begin_tokens = self.tokenizer.encode(match_begin, add_special_tokens=False)
         end_tokens = self.tokenizer.encode(match_end, add_special_tokens=False)
         sep_tokens = self.tokenizer.encode(match_sep, add_special_tokens=False)
         new_matches = {}
-        for pos, (_, edges) in matches.items():
+        for pos, (_, edges, weights) in match.items():
             new_edges = []
-            for i, edge in enumerate(edges):
+            for i, (edge, weight) in enumerate(zip(edges, weights)):
                 if i == 0:
                     new_edges += begin_tokens
-                new_edges += edge
+                if include_weights:
+                    new_edges += edge + self.tokenizer.encode(
+                        f"{weight:.1f}", add_special_tokens=False
+                    )
+                else:
+                    new_edges += edge
                 if i == len(edges) - 1:
                     new_edges += end_tokens
                 else:
@@ -413,7 +428,7 @@ class ConceptNetMatcher:
                 offset += len(m[1])
         return self.tokenizer.decode(sentence_tokens)
 
-    def tokenize_and_mask(self, sentence: str, sentence_mask: str):
+    def tokenize_and_mask(self, sentence: str, sentence_mask: str = ""):
         """
         Args:
             sentence: A sentence to be tagged by Part of Speech (POS)
@@ -424,7 +439,7 @@ class ConceptNetMatcher:
         use_mask = False
         if len(sentence_mask) != 0:
             mask_characters = set(sentence_mask)
-            if mask_characters != {"+", "-"}:
+            if not mask_characters.issubset({"+", "-"}):
                 raise ValueError(
                     f"Sentence mask should only be comprised of '+' "
                     f"and '-',"
@@ -436,9 +451,7 @@ class ConceptNetMatcher:
                 )
             use_mask = True
 
-        tokens = nltk.word_tokenize(sentence.lower())
-        masks = []
-        ids = []
+        tokens = nltk.word_tokenize(sentence)
         filter_set = {
             "do",
             "did",
@@ -447,7 +460,8 @@ class ConceptNetMatcher:
             "have",
             "having",
             "has",
-            "had" "be",
+            "had",
+            "be",
             "am",
             "is",
             "are",
@@ -456,29 +470,47 @@ class ConceptNetMatcher:
             "were",
         }
         offset = 0
-        for token, pos in nltk.pos_tag(tokens):
+        masks = []
+        ids = []
+        allowed_tokens = []
+        for token, pos in self.safe_pos_tag(tokens):
             token_position = sentence.find(token, offset)
-            offset += token_position + len(token)
-            allowed_tokens = []
+            offset = token_position + len(token)
+
             # Relaxed matching, If any part is not masked, allow searchin for that part
-            if not use_mask or "+" in set(sentence_mask[token_position:offset]):
-                ids.append(self.tokenizer.encode(token, add_special_tokens=False))
-                if (
-                    "NN" in pos
-                    or "JJ" in pos
-                    or "RB" in pos
-                    or "VB" in pos
-                    and token not in filter_set
-                ):
-                    allowed_tokens.append(token)
-                    # noun, adjective, adverb, verb
-                    masks.append([1] * len(ids[-1]))
-                else:
-                    masks.append([0] * len(ids[-1]))
-            logging.debug(
-                f"Tokens allowed for matching: {allowed_tokens} from sentence {sentence}"
-            )
+            ids.append(self.tokenizer.encode(token, add_special_tokens=False))
+            if (not use_mask or "+" in set(sentence_mask[token_position:offset])) and (
+                pos.startswith("NN")
+                or pos.startswith("JJ")
+                or (pos.startswith("RB") and token.lower().endswith("ly"))
+                or (pos.startswith("VB") and token.lower() not in filter_set)
+            ):
+                allowed_tokens.append(token)
+                # noun, adjective, adverb, verb
+                masks.append([1] * len(ids[-1]))
+            else:
+                masks.append([0] * len(ids[-1]))
+        logging.debug(
+            f"Tokens allowed for matching: {allowed_tokens} from sentence {sentence}"
+        )
         return [i for iid in ids for i in iid], [m for mask in masks for m in mask]
+
+    @staticmethod
+    def safe_pos_tag(tokens):
+        cleaned_tokens_with_index = [
+            (i, token)
+            for i, token in enumerate(tokens)
+            if len(set(token).intersection({"<", ">", "/"})) == 0
+        ]
+        pos_result = nltk.pos_tag([ct[1] for ct in cleaned_tokens_with_index])
+        result = [[token, ","] for token in tokens]
+        for (i, _), (token, pos) in zip(cleaned_tokens_with_index, pos_result):
+            _, individual_pos = nltk.pos_tag([token])[0]
+            if individual_pos.startswith("NN"):
+                result[i][1] = individual_pos
+            else:
+                result[i][1] = pos
+        return [tuple(r) for r in result]
 
     def __reduce__(self):
         return ConceptNetMatcher, (self.tokenizer,)

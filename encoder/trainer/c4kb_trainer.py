@@ -9,6 +9,7 @@ from ..dataset.base import collate_function_dict_to_batch_encoding, dict_iter
 from ..dataset.c4kb import C4KBDataset
 from ..utils.config import C4KBTrainConfig
 from ..utils.settings import proxies, model_cache_dir, huggingface_mirror
+from ..utils.adafactor import Adafactor
 
 
 class C4KBTrainer(pl.LightningModule):
@@ -130,12 +131,20 @@ class C4KBTrainer(pl.LightningModule):
                 print(f"{key}: {value}")
 
     def configure_optimizers(self):
-        optim_cls = getattr(t.optim, self.config.optimizer_class)
-        return optim_cls(
-            self.parameters(),
-            lr=self.config.learning_rate,
-            weight_decay=self.config.l2_regularization,
-        )
+        if self.config.optimizer_class == "Adafactor":
+            optim = Adafactor(
+                self.parameters(),
+                lr=self.config.learning_rate,
+                weight_decay=self.config.l2_regularization,
+            )
+        else:
+            optim_cls = getattr(t.optim, self.config.optimizer_class)
+            optim = optim_cls(
+                self.parameters(),
+                lr=self.config.learning_rate,
+                weight_decay=self.config.l2_regularization,
+            )
+        return optim
 
     @staticmethod
     def collate_and_filter_outputs(outputs):

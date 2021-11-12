@@ -16,7 +16,7 @@
 #include <iostream>
 
 using Edge = std::tuple<long, long, long, float, std::string>;
-using MatchResult = std::unordered_map<size_t, std::tuple<size_t, std::vector<std::vector<int>>>>;
+using MatchResult = std::unordered_map<size_t, std::tuple<size_t, std::vector<std::vector<int>>, std::vector<float>>>;
 
 class TrieNode {
 public:
@@ -202,7 +202,7 @@ public:
     matchByNode(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
                 const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
                 int maxTimes = 100, int maxDepth = 3, int maxEdges = 10, int seed = -1,
-                int edgeBeamWidth = -1,
+                int edgeBeamWidth = -1, bool trimPath = true,
                 float discardEdgesIfSimilarityBelow = 0,
                 float discardEdgesIfRankBelow = 0) const;
 
@@ -210,7 +210,7 @@ public:
     matchByNodeEmbedding(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
                          const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
                          int maxTimes = 100, int maxDepth = 3, int maxEdges = 10, int seed = -1,
-                         int edgeBeamWidth = -1,
+                         int edgeBeamWidth = -1, bool trimPath = true,
                          float discardEdgesIfSimilarityBelow = 0.5,
                          float discardEdgesIfRankBelow = 0) const;
 
@@ -218,7 +218,7 @@ public:
     matchByToken(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
                  const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
                  int maxTimes = 100, int maxDepth = 3, int maxEdges = 10, int seed = -1,
-                 int edgeBeamWidth = -1,
+                 int edgeBeamWidth = -1, bool trimPath = true,
                  float discardEdgesIfSimilarityBelow = 0,
                  float discardEdgesIfRankBelow = 0,
                  const std::vector<std::vector<int>> &rankFocus = {},

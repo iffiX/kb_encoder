@@ -9,8 +9,12 @@ import torch as t
 from typing import List, Union
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, BatchEncoding
 from encoder.dataset.concept_net import ConceptNetMatcher
-from encoder.utils.settings import dataset_cache_dir, preprocess_cache_dir
+from encoder.utils.settings import (
+    dataset_cache_dir,
+    preprocess_cache_dir,
+)
 from encoder.utils.file import open_file_with_create_directories, download_to
+from encoder.utils.inspect import save_inspect_data
 from .base import StaticIterableDataset
 
 
@@ -29,7 +33,9 @@ class CommonsenseQADataset:
         include_option_label_in_sentence: bool = False,
         include_option_label_in_answer_and_choices: bool = False,
         use_option_label_as_answer_and_choices: bool = False,
+        insert_answers_at_end: bool = False,
         match_closest_when_no_equal: bool = True,
+        regenerate: bool = True,
     ):
         self.tokenizer = tokenizer
         # Word piece is stabler for matching purpose
@@ -42,13 +48,12 @@ class CommonsenseQADataset:
         self.include_option_label_in_answer_and_choices = (
             include_option_label_in_answer_and_choices
         )
+        self.insert_answers_at_end = insert_answers_at_end
         self.use_option_label_as_answer_and_choices = (
             use_option_label_as_answer_and_choices
         )
         self.match_closest_when_no_equal = match_closest_when_no_equal
-
-        if use_matcher:
-            self.matcher = ConceptNetMatcher(tokenizer=self.matcher_tokenizer)
+        self.matcher = ConceptNetMatcher(tokenizer=self.matcher_tokenizer)
 
         base = os.path.join(dataset_cache_dir, "commonsense_qa")
         train_path = os.path.join(base, "train.jsonl")
@@ -85,13 +90,16 @@ class CommonsenseQADataset:
                 or data["use_option_label_as_answer_and_choices"]
                 != self.use_option_label_as_answer_and_choices
             ):
-                logging.info(
-                    "Configuration mismatch, regenerating commonsense qa dataset."
-                )
-                self.train_data = self.parse_data(train_path)
-                self.validate_data = self.parse_data(validate_path)
-                self.test_data = self.parse_data(test_path)
-                self.save(archive_path)
+                if regenerate:
+                    logging.info(
+                        "Configuration mismatch, regenerating commonsense qa dataset."
+                    )
+                    self.train_data = self.parse_data(train_path)
+                    self.validate_data = self.parse_data(validate_path)
+                    self.test_data = self.parse_data(test_path)
+                    self.save(archive_path)
+                else:
+                    raise ValueError("Configuration mismatch")
             else:
                 self.train_data = data["train"]
                 self.validate_data = data["validate"]
@@ -119,86 +127,48 @@ class CommonsenseQADataset:
         else:
             data = self.test_data[index]
         if self.use_matcher:
-            # data = copy.deepcopy(data)
+            # prevent any modification to data, also prevent checkpoint storing
+            # data to gpu by moving
+            data = copy.deepcopy(data)
 
-            # if split == "train":
-            #     match = self.matcher.match(
-            #         data["text_sentence"],
-            #         similarity_exclude=similarity_exclude + data["false_answers_match"],
-            #         rank_focus=data["answer_match"] + data["question_match"],
-            #         rank_exclude=data["false_answers_match"],
-            #         max_times=300,
-            #         max_depth=2,
-            #         max_edges=4,
-            #     )
-            # else:
-            #     match = self.matcher.match(
-            #         data["text_sentence"],
-            #         similarity_exclude=similarity_exclude,
-            #         rank_focus=data["question_match"],
-            #         max_times=300,
-            #         max_depth=2,
-            #         max_edges=4,
-            #     )
+            match = self.matcher.match_by_node_embedding(
+                data["text_choices"],
+                target_sentence=data["text_question"],
+                max_times=300,
+                max_depth=2,
+                max_edges=16,
+                seed=self.matcher_seed,
+                discard_edges_if_similarity_below=0.45,
+            )
 
-            # # BERT tokenizer doesn't honor T5 eos token / Roberta sep token
-            # # and choice brackets, fix it.
-            # # Have no effect for BERT, ALBERT.
-            # new_sentence = new_sentence.replace("< / s >", "</s>")
-            # if self.include_option_label_in_sentence:
-            #     new_sentence = new_sentence.replace("( a )", "(a)")
-            #     new_sentence = new_sentence.replace("( b )", "(b)")
-            #     new_sentence = new_sentence.replace("( c )", "(c)")
-            #     new_sentence = new_sentence.replace("( d )", "(d)")
-            #     new_sentence = new_sentence.replace("( e )", "(e)")
-            #
-            # # Note that the sentence is now uncased after being processed
-            # # by BERT tokenizer
-            # data["sentence"] = self.tokenizer(
-            #     new_sentence,
-            #     padding="max_length",
-            #     max_length=self.max_seq_length,
-            #     truncation=True,
-            #     return_tensors="pt",
-            # ).input_ids
+            # match = self.matcher.match_by_token(
+            #     data["text_choices"],
+            #     target_sentence=data["text_question"],
+            #     max_times=300,
+            #     max_depth=2,
+            #     max_edges=12,
+            #     seed=self.matcher_seed,
+            #     # rank_focus=data["question_match"],
+            # )
 
-            if "matched" not in data:
-                data["matched"] = True
-
-                match = self.matcher.match_by_node_embedding(
-                    data["text_choices"],
-                    target_sentence=data["text_question"],
-                    max_times=300,
-                    max_depth=3,
-                    max_edges=12,
-                    seed=self.matcher_seed,
-                    discard_edges_if_similarity_below=0.5,
-                )
-
-                # match = self.matcher.match_by_token(
-                #     data["text_choices"],
-                #     target_sentence=data["text_question"],
-                #     max_times=300,
-                #     max_depth=2,
-                #     max_edges=12,
-                #     seed=self.matcher_seed,
-                #     # rank_focus=data["question_match"],
-                # )
-
-                # match = self.matcher.match(
-                #     data["text_choices"], target_sentence=data["text_question"]
-                # )
-                new_choices = self.matcher.insert_match(data["text_choices"], match)
-                encoded_sentence = self.tokenizer(
-                    data["text_question"],
-                    new_choices,
-                    padding="max_length",
-                    max_length=self.max_seq_length,
-                    truncation=True,
-                    return_tensors="pt",
-                )
-                data["sentence"] = encoded_sentence.input_ids
-                data["mask"] = encoded_sentence.attention_mask
+            # match = self.matcher.match(
+            #     data["text_choices"], target_sentence=data["text_question"]
+            # )
+            new_choices = self.matcher.insert_match(
+                data["text_choices"], match, insert_at_end=self.insert_answers_at_end
+            )
+            encoded_sentence = self.tokenizer(
+                data["text_question"],
+                new_choices,
+                padding="max_length",
+                max_length=self.max_seq_length,
+                truncation=True,
+                return_tensors="pt",
+            )
+            data["org_sentence"] = data["sentence"]
+            data["org_mask"] = data["mask"]
+            data["sentence"] = encoded_sentence.input_ids
+            data["mask"] = encoded_sentence.attention_mask
 
         return data
 
@@ -219,6 +189,7 @@ class CommonsenseQADataset:
         correct = 0
         approximately_correct = 0
         missing = 0
+        answers = {}
         for i in range(tokens.shape[0]):
             answer = self.tokenizer.decode(tokens[i], skip_special_tokens=True)
             ref_answer_tensor = batch["answer"][i]
@@ -236,8 +207,10 @@ class CommonsenseQADataset:
                 f"answer: [{answer}] \n"
                 f"ref_answer: [{ref_answer}]"
             )
+            answers[batch["id"][i]] = False
             if answer == ref_answer:
                 correct += 1
+                answers[batch["id"][i]] = True
             elif answer not in batch["choices"][i]:
                 if self.match_closest_when_no_equal:
                     # Gestalt Pattern Matching
@@ -247,14 +220,19 @@ class CommonsenseQADataset:
                     )
                     if len(possible_matches) == 0:
                         missing += 1
+
                     elif possible_matches[0] == ref_answer:
                         approximately_correct += 1
                         correct += 1
+                        answers[batch["id"][i]] = True
                 else:
                     missing += 1
+
         print(f"Missing ratio {float(missing) / total}")
         if self.match_closest_when_no_equal:
             print(f"Approximately correct ratio {float(approximately_correct) / total}")
+
+        save_inspect_data(answers, "commensense_qa_val_answers")
         return {"accuracy": float(correct) / total}
 
     def generate_test_results_logits(self, logits: t.Tensor, directory: str):
@@ -406,9 +384,7 @@ class CommonsenseQADataset:
                     )
                     # Use -100 to focus on training the answer part, rather than pad
                     # tokens
-                    answer.qrw4rtmasked_fill_(
-                        answer == self.tokenizer.pad_token_id, -100
-                    )
+                    answer.masked_fill_(answer == self.tokenizer.pad_token_id, -100)
                     preprocessed["answer"] = answer
 
                     # DEPRECATED, prepared for match by token, rank focus and exclude
