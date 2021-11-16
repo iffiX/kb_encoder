@@ -2,6 +2,7 @@ import os
 import functools
 import pathlib
 import gzip
+import zipfile
 import shutil
 import requests
 from tqdm.auto import tqdm
@@ -38,3 +39,8 @@ def decompress_gz(path_from, path_to):
     with gzip.open(path_from, "rb") as f_in:
         with open(path_to, "wb") as f_out:
             shutil.copyfileobj(f_in, f_out)
+
+
+def decompress_zip(path_from, dir_path_to):
+    with zipfile.ZipFile(path_from, "r") as zip_ref:
+        zip_ref.extractall(dir_path_to)

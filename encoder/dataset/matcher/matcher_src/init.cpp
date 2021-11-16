@@ -51,7 +51,6 @@ PYBIND11_MODULE(matcher, m) {
             .def_readonly("nodes", &KnowledgeBase::nodes)
             .def_readonly("relationships", &KnowledgeBase::relationships)
             .def_readonly("raw_relationships", &KnowledgeBase::rawRelationships)
-            .def_readonly("disabled_edges", &KnowledgeBase::disabledEdges)
             .def_readonly("node_embedding_file_name", &KnowledgeBase::nodeEmbeddingFileName)
             .def_readonly("landmark_distances", &KnowledgeBase::landmarkDistances)
             .def_readwrite("tokenized_nodes", &KnowledgeBase::tokenizedNodes)
@@ -64,6 +63,7 @@ PYBIND11_MODULE(matcher, m) {
             .def("get_edges", &KnowledgeBase::getEdges)
             .def("get_nodes", py::overload_cast<>(&KnowledgeBase::getNodes, py::const_))
             .def("get_nodes", py::overload_cast<const std::vector<long> &>(&KnowledgeBase::getNodes, py::const_))
+            .def("add_composite_node", &KnowledgeBase::addCompositeNode)
             .def("set_node_embedding_file_name", &KnowledgeBase::setNodeEmbeddingFileName,
                  py::arg("path"),
                  py::arg("load_embedding_to_mem") = true)
@@ -128,9 +128,7 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("archive_path"))
             .def("load", &KnowledgeMatcher::load,
                  py::arg("archive_path"),
-                 py::arg("load_embedding_to_mem") = true)
-            .def("get_node_trie", &KnowledgeMatcher::getNodeTrie)
-            .def("get_node_map", &KnowledgeMatcher::getNodeMap);
+                 py::arg("load_embedding_to_mem") = true);
 
     py::class_<ConceptNetReader>(m, "ConceptNetReader")
             .def(py::init<>())

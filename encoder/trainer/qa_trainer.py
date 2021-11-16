@@ -2,8 +2,6 @@ import torch as t
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, BatchEncoding
-from .c4kb_trainer import C4KBTrainer
-from ..model.ext_vocab import ExtendVocabForQA
 from ..dataset.base import EmptyDataset, collate_function_dict_to_batch_encoding
 
 # from ..dataset.qa.squad import SQuADDataset

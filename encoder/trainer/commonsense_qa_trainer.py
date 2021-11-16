@@ -6,15 +6,12 @@ from torch.utils.data import DataLoader
 from torch.distributed import all_gather_object, get_world_size, get_rank
 from transformers import T5ForConditionalGeneration, T5TokenizerFast, BatchEncoding
 from pytorch_lightning.utilities import rank_zero_only
-from ..dataset.base import collate_function_dict_to_batch_encoding, dict_iter
+from .utils import collate_and_filter_outputs, set_worker_sharing_strategy
+from encoder.dataset.base import collate_function_dict_to_batch_encoding
 from encoder.dataset.commonsense_qa import CommonsenseQADataset
-from ..utils.config import CommonsenseQATrainConfig
-from ..utils.settings import proxies, model_cache_dir, huggingface_mirror
-from ..utils.adafactor import Adafactor
-
-
-def set_worker_sharing_strategy(worker_id: int) -> None:
-    t.multiprocessing.set_sharing_strategy("file_system")
+from encoder.utils.config import CommonsenseQATrainConfig
+from encoder.utils.settings import proxies, model_cache_dir, huggingface_mirror
+from encoder.utils.adafactor import Adafactor
 
 
 class CommonsenseQATrainer(pl.LightningModule):
@@ -33,7 +30,7 @@ class CommonsenseQATrainer(pl.LightningModule):
         self.is_distributed = is_distributed
 
         self.tokenizer = T5TokenizerFast.from_pretrained(
-            config.base_type,
+            config.base_type if config.base_type.startswith("t5") else "t5-base",
             cache_dir=model_cache_dir,
             proxies=proxies,
             mirror=huggingface_mirror,
@@ -43,6 +40,7 @@ class CommonsenseQATrainer(pl.LightningModule):
             max_seq_length=config.max_seq_length,
             generate_length=config.generate_length,
             use_matcher=config.use_matcher,
+            matcher_mode=config.matcher_mode,
             matcher_seed=config.seed,
             include_option_label_in_sentence=config.include_option_label_in_sentence,
             include_option_label_in_answer_and_choices=config.include_option_label_in_answer_and_choices,
@@ -114,21 +112,11 @@ class CommonsenseQATrainer(pl.LightningModule):
     # noinspection PyTypeChecker
     def training_step(self, batch: BatchEncoding, batch_idx):
         # answer shape [batch_size, sequence_length]
-        input_ids = batch["sentence"].to(self.real_device or self.device)
         out = self.model(
-            input_ids=input_ids,
+            input_ids=batch["sentence"].to(self.real_device or self.device),
             attention_mask=batch["mask"].to(self.real_device or self.device),
             labels=batch["answer"].to(self.real_device or self.device),
         )
-        # for i in range(out.logits.shape[0]):
-        #     print(self.tokenizer.decode(input_ids[i]))
-        #     ref_answer_tensor = batch["answer"][i]
-        #     ref_answer_tensor.masked_fill_(
-        #         ref_answer_tensor == -100, self.tokenizer.pad_token_id
-        #     )
-        #     print(self.tokenizer.decode(ref_answer_tensor))
-        #     print(self.tokenizer.decode(t.argmax(out.logits[i], dim=-1)))
-        #     print()
         return out.loss
 
     # noinspection PyTypeChecker
@@ -160,7 +148,7 @@ class CommonsenseQATrainer(pl.LightningModule):
             self.validate_on_every_process(outputs)
 
     def validate_on_every_process(self, outputs):
-        batch, tokens = self.collate_and_filter_outputs(outputs)
+        batch, tokens = collate_and_filter_outputs(outputs)
         metrics = self.dataset.validate_tokens(batch, tokens)
         for key, value in metrics.items():
             self.log(key, value, prog_bar=True, sync_dist=True)
@@ -198,7 +186,7 @@ class CommonsenseQATrainer(pl.LightningModule):
 
     @rank_zero_only
     def test_on_main_process(self, outputs):
-        _, tokens = self.collate_and_filter_outputs(outputs)
+        _, tokens = collate_and_filter_outputs(outputs)
         self.dataset.generate_test_results_tokens(tokens, self.stage_result_path)
 
     def configure_optimizers(self):
@@ -216,7 +204,7 @@ class CommonsenseQATrainer(pl.LightningModule):
                 weight_decay=self.config.l2_regularization,
             )
         sch = t.optim.lr_scheduler.ReduceLROnPlateau(
-            optim, mode="max", factor=0.3, patience=0, min_lr=1e-6, verbose=True
+            optim, mode="max", factor=0.3, patience=0, min_lr=3e-5, verbose=True
         )
         return (
             [optim],
@@ -228,24 +216,3 @@ class CommonsenseQATrainer(pl.LightningModule):
                 }
             ],
         )
-
-    @staticmethod
-    def collate_and_filter_outputs(outputs):
-        batch = collate_function_dict_to_batch_encoding([o["batch"] for o in outputs])
-        tokens = t.cat([o["tokens"] for o in outputs], dim=0)
-        list_of_results = [
-            (b["id"][0], b, to.unsqueeze(0)) for b, to in zip(dict_iter(batch), tokens)
-        ]
-        # filter duplicates brought by resetting dataset
-        existed = {}
-        filtered = []
-        for lr in list_of_results:
-            if lr[0] not in existed:
-                filtered.append(lr)
-                existed[lr[0]] = True
-        list_of_results = filtered
-        tokens = t.cat([lr[2] for lr in list_of_results], dim=0)
-        batch = collate_function_dict_to_batch_encoding(
-            [lr[1] for lr in list_of_results]
-        )
-        return batch, tokens

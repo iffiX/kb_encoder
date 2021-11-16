@@ -3,21 +3,22 @@ import os
 import logging
 import pytorch_lightning as pl
 from ..utils.config import *
-from .c4kb_trainer import C4KBTrainer
 from .qa_trainer import QATrainer
 from .glue_trainer import GLUETrainer
-from .comm_qa_trainer import CommonsenseQATrainer
-from .iter_env import IterEnv
+from .commonsense_qa_trainer import CommonsenseQATrainer
+from .openbook_qa_trainer import OpenBookQATrainer
+from .ensemble_trainer import EnsembleTrainer
 from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.plugins import DDPPlugin
 
-stage_name_trainer_map = {
-    "c4kb": C4KBTrainer,
+stage_name_to_trainer_map = {
     "qa": QATrainer,
     "glue": GLUETrainer,
     "commonsense_qa": CommonsenseQATrainer,
+    "openbook_qa": OpenBookQATrainer,
+    "ensemble": EnsembleTrainer,
 }
 
 
@@ -30,9 +31,7 @@ def find_checkpoint(
         for file in os.listdir(checkpoint_path):
             if file.endswith(".ckpt"):
                 available_files.append(file)
-        sorted_by_time = sorted(
-            available_files, key=lambda file: os.stat(file).st_mtime
-        )
+        sorted_by_time = sorted(available_files, key=lambda f: os.stat(f).st_mtime)
         if len(sorted_by_time) == 0:
             return None
         checkpoint = sorted_by_time[-1]
@@ -45,8 +44,8 @@ def find_checkpoint(
                 available_files.append(file)
         sorted_by_epoch = sorted(
             available_files,
-            key=lambda file: float(
-                re.search(f"{monitor}=([+-]?([0-9]*[.])?[0-9]+)", file)[1]
+            key=lambda f: float(
+                re.search(f"{monitor}=([+-]?([0-9]*[.])?[0-9]+)", f)[1]
             ),
         )
         if len(sorted_by_epoch) == 0:
@@ -59,18 +58,20 @@ def find_checkpoint(
     return os.path.join(checkpoint_path, checkpoint)
 
 
-def stage_name_to_trainer(stage: str, stage_config, stage_result_path, is_distributed):
-    if stage in stage_name_trainer_map:
-        return stage_name_trainer_map[stage](
+def stage_name_to_trainer(
+    stage: str, stage_config, stage_result_path: str, is_distributed: bool
+):
+    if stage in stage_name_to_trainer_map:
+        return stage_name_to_trainer_map[stage](
             stage_config, stage_result_path, is_distributed=is_distributed
         )
     else:
         raise ValueError(f"Unknown stage {stage}.")
 
 
-def stage_name_to_checkpoint(stage: str, checkpoint):
-    if stage in stage_name_trainer_map:
-        return stage_name_trainer_map[stage].load_from_checkpoint(checkpoint)
+def stage_name_to_checkpoint(stage: str, checkpoint_path: str):
+    if stage in stage_name_to_trainer_map:
+        return stage_name_to_trainer_map[stage].load_from_checkpoint(checkpoint_path)
     else:
         raise ValueError(f"Unknown stage {stage}.")
 
@@ -142,21 +143,15 @@ def _train(
     trainer.fit(stage_trainer)
 
 
-def train_iter(config: Config, stage_index: int, only_test: bool = False):
-    logging.info("Iterative training mode")
+def train(config: Config, stage_index: int, only_test: bool = False):
+    # t.multiprocessing.set_start_method("spawn", force=True)
+    # execute stages
+    stage = config.stages[stage_index]
+
     is_distributed = (isinstance(config.gpus, list) and len(config.gpus) > 1) or (
         isinstance(config.gpus, int) and config.gpus > 1
     )
-    iter_config = config.configs[stage_index]
-    if iter_config.kb_trainer_stage == "c4kb":
-        kb_trainer = C4KBTrainer.load_from_checkpoint(iter_config, only_init_model=True)
-    elif iter_config.kb_trainer_stage == "none":
-        kb_trainer = None
-    else:
-        raise ValueError(f"Unknown kb stage {iter_config.kb_trainer_stage}.")
-
-    stage = iter_config.task_trainer_stage
-    stage_config = stage_name_to_config(stage, iter_config.task_trainer_config)
+    stage_config = config.configs[stage_index]
     seed_everything(stage_config.seed, workers=True)
     if stage_config.load_worker_num > 0:
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -169,34 +164,9 @@ def train_iter(config: Config, stage_index: int, only_test: bool = False):
         config.working_directory, str(stage_index), "result"
     )
 
-    # Run epoch
-    # if epoch % refresh_attr_score_interval == 0
-    # -> Compute attr score for each token in the sample
-    # -> Use matcher to find matches by providing attr score mask
-    #    (Or Use kb model to find matches)
-    # -> Compute new input "sentence", "mask"
-    # -> Train model with new input
-    IterEnv.patch_checkpoint_hook(stage_name_trainer_map[stage])
     if not only_test:
         stage_trainer = stage_name_to_trainer(
             stage, stage_config, stage_result_path, is_distributed
-        )
-
-        # Modify dataset and add post processing hook
-        _iter_env = IterEnv(
-            stage_trainer,
-            kb_trainer=kb_trainer,
-            attr_file_path=iter_config.attr_file_path,
-            attr_steps=iter_config.attr_steps,
-            attr_threshold=iter_config.attr_threshold,
-            attr_warmup_epochs=iter_config.attr_warmup_epochs,
-            attr_epoch_interval=iter_config.attr_epoch_interval,
-            attr_process_batch_size=iter_config.attr_process_batch_size,
-            matcher_max_times=iter_config.matcher_max_times,
-            matcher_max_depth=iter_config.matcher_max_depth,
-            matcher_max_edges=iter_config.matcher_max_edges,
-            matcher_discard_edges_if_similarity_below=iter_config.matcher_discard_edges_if_similarity_below,
-            matcher_seed=iter_config.matcher_seed,
         )
 
         logging.info("Training.")
@@ -223,23 +193,6 @@ def train_iter(config: Config, stage_index: int, only_test: bool = False):
         # and must perform manual load
         stage_trainer = stage_name_to_checkpoint(stage, checkpoint)
 
-        # Modify dataset and add post processing hook
-        _iter_env = IterEnv(
-            stage_trainer,
-            kb_trainer=kb_trainer,
-            attr_file_path=iter_config.attr_file_path,
-            attr_steps=iter_config.attr_steps,
-            attr_threshold=iter_config.attr_threshold,
-            attr_warmup_epochs=iter_config.attr_warmup_epochs,
-            attr_epoch_interval=iter_config.attr_epoch_interval,
-            attr_process_batch_size=iter_config.attr_process_batch_size,
-            matcher_max_times=iter_config.matcher_max_times,
-            matcher_max_depth=iter_config.matcher_max_depth,
-            matcher_max_edges=iter_config.matcher_max_edges,
-            matcher_discard_edges_if_similarity_below=iter_config.matcher_discard_edges_if_similarity_below,
-            matcher_seed=iter_config.matcher_seed,
-        )
-
         trainer = pl.Trainer(
             gpus=config.gpus,
             accelerator="ddp" if len(config.gpus) > 1 else None,
@@ -247,64 +200,3 @@ def train_iter(config: Config, stage_index: int, only_test: bool = False):
             deterministic=True,
         )
         trainer.test(stage_trainer)
-
-
-def train(config: Config, stage_index: int, only_test: bool = False):
-    # t.multiprocessing.set_start_method("spawn", force=True)
-    # execute stages
-    stage = config.stages[stage_index]
-    if stage == "iter":
-        train_iter(config, stage_index, only_test)
-    else:
-        is_distributed = (isinstance(config.gpus, list) and len(config.gpus) > 1) or (
-            isinstance(config.gpus, int) and config.gpus > 1
-        )
-        stage_config = config.configs[stage_index]
-        seed_everything(stage_config.seed, workers=True)
-        if stage_config.load_worker_num > 0:
-            os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-        checkpoint_path = os.path.join(
-            config.working_directory, str(stage_index), "checkpoint"
-        )
-        log_path = os.path.join(config.working_directory, str(stage_index), "log")
-        stage_result_path = os.path.join(
-            config.working_directory, str(stage_index), "result"
-        )
-
-        if not only_test:
-            stage_trainer = stage_name_to_trainer(
-                stage, stage_config, stage_result_path, is_distributed
-            )
-
-            logging.info("Training.")
-            _train(
-                config=config,
-                stage_config=stage_config,
-                stage_trainer=stage_trainer,
-                is_distributed=is_distributed,
-                checkpoint_path=checkpoint_path,
-                log_path=log_path,
-            )
-        else:
-            logging.info("Testing.")
-
-            checkpoint = find_checkpoint(checkpoint_path)
-            if checkpoint is None:
-                raise RuntimeError("Cannot find a valid checkpoint for testing.")
-            else:
-                logging.info(f"Using checkpoint {checkpoint}")
-
-            # model` must be provided to `trainer.test()` when it hasn't been passed
-            # in a previous run.
-            # the ckpt_path in test will be ignored in this case.
-            # and must perform manual load
-            stage_trainer = stage_name_to_checkpoint(stage, checkpoint)
-
-            trainer = pl.Trainer(
-                gpus=config.gpus,
-                accelerator="ddp" if len(config.gpus) > 1 else None,
-                plugins=[DDPPlugin(find_unused_parameters=True)],
-                deterministic=True,
-            )
-            trainer.test(stage_trainer)

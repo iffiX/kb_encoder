@@ -23,9 +23,6 @@
                 "save": false
             },
             "task_trainer_stage": "commonsense_qa",
-            "kb_trainer_checkpoint": "",
-            "kb_trainer_stage": "none",
-            "attr_file_path": "/home/muhan/data/workspace/kb_encoder/data/inspect/attr_map_base_epoch=8_steps=2.data",
             "attr_steps": 2,
             "attr_threshold": 0.35,
             "attr_warmup_epochs": 8,

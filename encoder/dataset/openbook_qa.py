@@ -8,20 +8,25 @@ import numpy as np
 import torch as t
 from typing import List
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, BatchEncoding
-from encoder.dataset.matcher.concept_net import ConceptNetMatcher
+from encoder.dataset.matcher.openbook_qa import OpenBookQAMatcher
 from encoder.utils.settings import (
     dataset_cache_dir,
     preprocess_cache_dir,
 )
-from encoder.utils.file import open_file_with_create_directories, download_to
+from encoder.utils.file import (
+    open_file_with_create_directories,
+    download_to,
+    decompress_zip,
+)
 from encoder.utils.inspect import save_inspect_data
 from .base import StaticIterableDataset
 
 
-class CommonsenseQADataset:
-    TRAIN_URL = "https://s3.amazonaws.com/commensenseqa/train_rand_split.jsonl"
-    VALIDATE_URL = "https://s3.amazonaws.com/commensenseqa/dev_rand_split.jsonl"
-    TEST_URL = "https://s3.amazonaws.com/commensenseqa/test_rand_split_no_answers.jsonl"
+class OpenBookQADataset:
+    OPENBOOK_QA_URL = (
+        "https://ai2-public-datasets.s3.amazonaws.com/open-book-qa/"
+        "OpenBookQA-V1-Sep2018.zip"
+    )
 
     def __init__(
         self,
@@ -56,24 +61,37 @@ class CommonsenseQADataset:
         )
         self.match_closest_when_no_equal = match_closest_when_no_equal
         self.regenerate = regenerate
-        self.matcher = ConceptNetMatcher(tokenizer=self.matcher_tokenizer)
+        self.matcher = OpenBookQAMatcher(tokenizer=self.matcher_tokenizer)
 
-        base = os.path.join(dataset_cache_dir, "commonsense_qa")
-        train_path = os.path.join(base, "train.jsonl")
-        validate_path = os.path.join(base, "validate.jsonl")
-        test_path = os.path.join(base, "test.jsonl")
-        archive_path = os.path.join(preprocess_cache_dir, "commonsense_qa.data")
-        if not os.path.exists(train_path):
-            logging.info("Downloading commonsense qa train dataset.")
-            download_to(self.TRAIN_URL, train_path)
-
-        if not os.path.exists(validate_path):
-            logging.info("Downloading commonsense qa validate dataset.")
-            download_to(self.VALIDATE_URL, validate_path)
-
-        if not os.path.exists(test_path):
-            logging.info("Downloading commonsense qa test dataset.")
-            download_to(self.TEST_URL, test_path)
+        openbook_qa_path = os.path.join(dataset_cache_dir, "openbook_qa")
+        train_path = os.path.join(
+            openbook_qa_path,
+            "OpenBookQA-V1-Sep2018",
+            "Data",
+            "Additional",
+            "train_complete.jsonl",
+        )
+        validate_path = os.path.join(
+            openbook_qa_path,
+            "OpenBookQA-V1-Sep2018",
+            "Data",
+            "Additional",
+            "dev_complete.jsonl",
+        )
+        test_path = os.path.join(
+            openbook_qa_path,
+            "OpenBookQA-V1-Sep2018",
+            "Data",
+            "Additional",
+            "test_complete.jsonl",
+        )
+        archive_path = os.path.join(preprocess_cache_dir, "openbook_qa.data")
+        if not os.path.exists(openbook_qa_path):
+            if not os.path.exists(str(openbook_qa_path) + ".zip"):
+                logging.info("Downloading OpenBook QA")
+                download_to(self.OPENBOOK_QA_URL, str(openbook_qa_path) + ".zip")
+            logging.info("Decompressing")
+            decompress_zip(str(openbook_qa_path) + ".zip", openbook_qa_path)
 
         if not os.path.exists(archive_path):
             self.train_data = self.parse_data(train_path)
@@ -95,7 +113,7 @@ class CommonsenseQADataset:
             ):
                 if regenerate:
                     logging.info(
-                        "Configuration mismatch, regenerating commonsense qa dataset."
+                        "Configuration mismatch, regenerating OpenBook QA dataset."
                     )
                     self.train_data = self.parse_data(train_path)
                     self.validate_data = self.parse_data(validate_path)
@@ -241,7 +259,7 @@ class CommonsenseQADataset:
         logits = logits.cpu().numpy()
         labels = np.argmax(logits, axis=1).tolist()
         with open_file_with_create_directories(
-            os.path.join(directory, "commonsense_qa.jsonl"), "w"
+            os.path.join(directory, "openbook_qa.csv"), "w"
         ) as file:
             if len(labels) != len(self.test_data):
                 raise ValueError(
@@ -250,16 +268,12 @@ class CommonsenseQADataset:
                 )
             answer_keys = ["A", "B", "C", "D", "E"]
             for label, preprocessed in zip(labels, self.test_data):
-                file.write(
-                    json.dumps(
-                        {"id": preprocessed["id"], "answerKey": answer_keys[label]}
-                    )
-                )
+                file.write(f"{preprocessed['id']},{answer_keys[label]}")
 
     def generate_test_results_tokens(self, tokens: t.Tensor, directory: str):
         missing = 0
         with open_file_with_create_directories(
-            os.path.join(directory, "commonsense_qa.jsonl"), "w"
+            os.path.join(directory, "openbook_qa.csv"), "w"
         ) as file:
             if tokens.shape[0] != len(self.test_data):
                 raise ValueError(
@@ -271,11 +285,7 @@ class CommonsenseQADataset:
                 answer = self.tokenizer.decode(answer_tokens, skip_special_tokens=True)
                 for i, choice in enumerate(preprocessed["choices"]):
                     if answer == choice:
-                        file.write(
-                            json.dumps(
-                                {"id": preprocessed["id"], "answerKey": answer_keys[i]}
-                            )
-                        )
+                        file.write(f"{preprocessed['id']},{answer_keys[i]}")
                         break
                 else:
                     missing += 1
@@ -283,7 +293,7 @@ class CommonsenseQADataset:
                         f"Missing answer, choices: {preprocessed['choices']}, "
                         f"answer: {answer}, using default A as answer."
                     )
-                    file.write(json.dumps({"id": preprocessed["id"], "answerKey": "A"}))
+                    file.write(f"{preprocessed['id']},A")
         print(f"Missing ratio {float(missing)/len(self.test_data)}")
 
     def parse_data(self, path):
@@ -314,10 +324,20 @@ class CommonsenseQADataset:
 
                 if sep is not None:
                     org_sentence = (
-                        entry["question"]["stem"] + f" {sep} " + sentence_choices
+                        entry["fact1"].capitalize()
+                        + ". "
+                        + entry["question"]["stem"]
+                        + f" {sep} "
+                        + sentence_choices
                     )
                 else:
-                    org_sentence = entry["question"]["stem"] + " " + sentence_choices
+                    org_sentence = (
+                        entry["fact1"].capitalize()
+                        + ". "
+                        + entry["question"]["stem"]
+                        + f"  "
+                        + sentence_choices
+                    )
                 encoded_sentence = self.tokenizer(
                     org_sentence,
                     padding="max_length",
@@ -432,7 +452,7 @@ class CommonsenseQADataset:
 
     def __reduce__(self):
         return (
-            CommonsenseQADataset,
+            OpenBookQADataset,
             (
                 self.tokenizer,
                 self.max_seq_length,

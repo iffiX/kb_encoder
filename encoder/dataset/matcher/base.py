@@ -1,66 +1,13 @@
-import re
 import os
-import sys
 import nltk
-import cmake
-import shutil
 import logging
-import subprocess
-import importlib.util
-from checksumdir import dirhash
-from typing import List, Dict, Tuple, Union
-
+from typing import List, Dict, Tuple
 from transformers import PreTrainedTokenizerBase
-from encoder.utils.settings import dataset_cache_dir, preprocess_cache_dir
-from encoder.utils.file import download_to, decompress_gz
-
-# Set this if gcc is not the default compiler
-# os.environ["CC"] = "/usr/bin/gcc-7"
-# os.environ["CXX"] = "/usr/bin/g++-7"
-
-_dir_path = str(os.path.dirname(os.path.abspath(__file__)))
-_src_path = str(os.path.join(_dir_path, "matcher_src"))
-_build_path = str(os.path.join(_dir_path, "build"))
-sys.path.append(_src_path)
-
-md5hash = dirhash(
-    _src_path,
-    "md5",
-    excluded_extensions=["txt", "so"],
-    excluded_files=["cmake-build-debug", "idea"],
-)
-build = True
-if os.path.exists(os.path.join(_build_path, "hash.txt")):
-    with open(os.path.join(_build_path, "hash.txt"), "r") as file:
-        build = file.read() != md5hash
-if build:
-    shutil.rmtree(_build_path, ignore_errors=True)
-    os.makedirs(_build_path)
-    subprocess.call(
-        [
-            os.path.join(cmake.CMAKE_BIN_DIR, "cmake"),
-            "-S",
-            _src_path,
-            "-B",
-            _build_path,
-        ]
-    )
-    subprocess.call(["make", "-C", _build_path, "clean"])
-    if subprocess.call(["make", "-C", _build_path, "-j4"]) != 0:
-        raise RuntimeError("Make failed")
-    subprocess.call(["make", "-C", _build_path, "install"])
-    with open(os.path.join(_build_path, "hash.txt"), "w") as file:
-        file.write(md5hash)
-
-matcher = importlib.import_module("matcher")
+from encoder.dataset.matcher import KnowledgeMatcher
+from encoder.utils.settings import preprocess_cache_dir
 
 
-class ConceptNetTokenizer:
-    def __init__(self):
-        pass
-
-
-class ConceptNetMatcher:
+class BaseMatcher:
     ASSERTION_URL = (
         "https://s3.amazonaws.com/conceptnet/downloads/2019/edges/"
         "conceptnet-assertions-5.7.0.csv.gz"
@@ -70,106 +17,9 @@ class ConceptNetMatcher:
         "numberbatch/numberbatch-en-19.08.txt.gz"
     )
 
-    def __init__(self, tokenizer: Union[PreTrainedTokenizerBase, ConceptNetTokenizer]):
+    def __init__(self, tokenizer: PreTrainedTokenizerBase, matcher: KnowledgeMatcher):
         self.tokenizer = tokenizer
-        nltk.download("stopwords")
-        nltk.download("punkt")
-        nltk.download("averaged_perceptron_tagger")
-
-        assertion_path = str(
-            os.path.join(dataset_cache_dir, "conceptnet-assertions.csv")
-        )
-        numberbatch_path = str(
-            os.path.join(dataset_cache_dir, "conceptnet-numberbatch.txt")
-        )
-        archive_path = str(
-            os.path.join(preprocess_cache_dir, "conceptnet-archive.data")
-        )
-        embedding_path = str(
-            os.path.join(preprocess_cache_dir, "conceptnet-embedding.hdf5")
-        )
-
-        for task, data_path, url in (
-            ("assertions", assertion_path, self.ASSERTION_URL),
-            ("numberbatch", numberbatch_path, self.NUMBERBATCH_URL),
-        ):
-            if not os.path.exists(data_path):
-                if not os.path.exists(str(data_path) + ".gz"):
-                    logging.info(f"Downloading concept net {task}")
-                    download_to(url, str(data_path) + ".gz")
-                logging.info("Decompressing")
-                decompress_gz(str(data_path) + ".gz", data_path)
-
-        if not os.path.exists(archive_path):
-            logging.info("Processing concept net")
-            reader = matcher.ConceptNetReader().read(
-                asserion_path=assertion_path,
-                weight_path=numberbatch_path,
-                weight_hdf5_path=embedding_path,
-                simplify_with_int8=True,
-            )
-            reader.tokenized_nodes = tokenizer(
-                reader.nodes, add_special_tokens=False
-            ).input_ids
-            relationships = [
-                " ".join([string.lower() for string in re.findall("[A-Z][a-z]*", rel)])
-                for rel in reader.relationships
-            ]
-            reader.tokenized_relationships = tokenizer(
-                relationships, add_special_tokens=False
-            ).input_ids
-            reader.tokenized_edge_annotations = tokenizer(
-                [edge[4] for edge in reader.edges], add_special_tokens=False
-            ).input_ids
-            net_matcher = matcher.KnowledgeMatcher(reader)
-            logging.info("Saving preprocessed concept net data as archive")
-            net_matcher.save(archive_path)
-            self.net_matcher = net_matcher
-        else:
-            self.net_matcher = matcher.KnowledgeMatcher(archive_path)
-
-        # Disable relations of similar word forms
-        self.net_matcher.kb.disable_edges_of_relationships(
-            [
-                "DerivedFrom",
-                "EtymologicallyDerivedFrom",
-                "EtymologicallyRelatedTo",
-                "FormOf",
-            ]
-        )
-
-    def match(
-        self,
-        source_sentence: str,
-        target_sentence: str = "",
-        source_mask: str = "",
-        target_mask: str = "",
-        seed: int = -1,
-    ) -> Dict[int, Tuple[int, List[List[int]], List[float]]]:
-        match_1 = self.match_by_node_embedding(
-            source_sentence,
-            target_sentence=target_sentence,
-            source_mask=source_mask,
-            target_mask=target_mask,
-            max_times=300,
-            max_depth=2,
-            max_edges=6,
-            edge_beam_width=3,
-            discard_edges_if_similarity_below=0.5,
-            seed=seed,
-        )
-        match_2 = self.match_by_token(
-            source_sentence,
-            target_sentence=target_sentence,
-            source_mask=source_mask,
-            target_mask=target_mask,
-            max_times=300,
-            max_depth=2,
-            max_edges=6,
-            edge_beam_width=3,
-            seed=seed,
-        )
-        return self.unify_match([match_1, match_2])
+        self.matcher = matcher
 
     def match_by_node(
         self,
@@ -192,11 +42,11 @@ class ConceptNetMatcher:
             end position is the index of the word behind the match
             start position is the index of the first word in the match
         """
-        if not self.net_matcher.kb.is_landmark_inited():
+        if not self.matcher.kb.is_landmark_inited():
             landmark_path = str(
                 os.path.join(preprocess_cache_dir, "conceptnet-landmark.cache")
             )
-            self.net_matcher.kb.init_landmarks(
+            self.matcher.kb.init_landmarks(
                 seed_num=100,
                 landmark_num=100,
                 seed=41379823,
@@ -213,7 +63,7 @@ class ConceptNetMatcher:
                 target_sentence, target_mask
             )
 
-        result = self.net_matcher.match_by_node(
+        result = self.matcher.match_by_node(
             source_sentence=source_tokens,
             target_sentence=target_tokens,
             source_mask=_source_mask,
@@ -260,7 +110,7 @@ class ConceptNetMatcher:
                 target_sentence, target_mask
             )
 
-        result = self.net_matcher.match_by_node_embedding(
+        result = self.matcher.match_by_node_embedding(
             source_sentence=source_tokens,
             target_sentence=target_tokens,
             source_mask=_source_mask,
@@ -309,7 +159,7 @@ class ConceptNetMatcher:
                 target_sentence, target_mask
             )
 
-        result = self.net_matcher.match_by_token(
+        result = self.matcher.match_by_token(
             source_sentence=source_tokens,
             target_sentence=target_tokens,
             source_mask=_source_mask,
@@ -360,9 +210,13 @@ class ConceptNetMatcher:
             start = m[0]
         return self.tokenizer.decode(sentence_tokens[start:]), result
 
+    @staticmethod
     def unify_match(
-        self, matches: List[Dict[int, Tuple[int, List[List[int]], List[float]]]]
+        matches: List[Dict[int, Tuple[int, List[List[int]], List[float]]]]
     ) -> Dict[int, Tuple[int, List[List[int]], List[float]]]:
+        """
+        Unify several match result into one.
+        """
         result = {}
         existed_knowledge = set()
         for m in matches:
@@ -370,7 +224,7 @@ class ConceptNetMatcher:
                 if end_pos not in result:
                     result[end_pos] = (start_pos, [], [])
                 if result[end_pos][0] != start_pos:
-                    raise ValueError("Start pos mismatch")
+                    raise ValueError("Start position mismatch")
                 for knowledge, weight in zip(knowledge_list, weights):
                     if tuple(knowledge) not in existed_knowledge:
                         result[end_pos][1].append(knowledge)
@@ -432,6 +286,9 @@ class ConceptNetMatcher:
         """
         Args:
             sentence: A sentence to be tagged by Part of Speech (POS)
+            sentence_mask: A string same length as sentence, comprised of "+" and "-", where
+                "+" indicates allowing the word overlapped with that position to be matched
+                and "-" indicates the position is disallowed.
         Returns:
             A list of token ids.
             A list of POS mask.
@@ -497,10 +354,12 @@ class ConceptNetMatcher:
 
     @staticmethod
     def safe_pos_tag(tokens):
+        # In case the input sentence is a decoded sentence with special characters
+        # used in tokenizers
         cleaned_tokens_with_index = [
             (i, token)
             for i, token in enumerate(tokens)
-            if len(set(token).intersection({"<", ">", "/"})) == 0
+            if len(set(token).intersection({"<", ">", "/", "]", "["})) == 0
         ]
         pos_result = nltk.pos_tag([ct[1] for ct in cleaned_tokens_with_index])
         result = [[token, ","] for token in tokens]
@@ -511,6 +370,3 @@ class ConceptNetMatcher:
             else:
                 result[i][1] = pos
         return [tuple(r) for r in result]
-
-    def __reduce__(self):
-        return ConceptNetMatcher, (self.tokenizer,)

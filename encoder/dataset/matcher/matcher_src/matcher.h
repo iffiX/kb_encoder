@@ -90,6 +90,10 @@ public:
         cista::raw::string nodeEmbeddingFileName;
     };
 
+    struct VectorHash {
+        std::size_t operator()(std::vector<int> const &vec) const;
+    };
+
 public:
     // target id, edge ids point to the target.
     std::unordered_map<long, std::vector<size_t>> edgeToTarget;
@@ -97,16 +101,23 @@ public:
     std::unordered_map<long, std::vector<size_t>> edgeFromSource;
     // source id, relation id, target id, weight, annotated representation.
     std::vector<Edge> edges;
-    std::vector<std::string> nodes;
+    std::vector<bool> isEdgeDisabled;
+
     std::vector<std::string> relationships;
     std::vector<std::string> rawRelationships;
-    std::unordered_set<size_t> disabledEdges;
+
+    std::vector<std::string> nodes;
+    Trie nodeTrie;
+    std::unordered_map<std::vector<int>, long, VectorHash> nodeMap;
+    std::vector<bool> isNodeComposite;
+    std::unordered_map<long, std::vector<long>> compositeNodes;
     std::shared_ptr<HighFive::File> nodeEmbeddingFile;
     std::shared_ptr<HighFive::DataSet> nodeEmbeddingDataset;
     std::shared_ptr<void> nodeEmbeddingMem;
     std::string nodeEmbeddingFileName;
     size_t nodeEmbeddingDim = 0;
     bool nodeEmbeddingSimplifyWithInt8 = false;
+
 
     std::vector<std::vector<int>> tokenizedNodes;
     std::vector<std::vector<int>> tokenizedRelationships;
@@ -131,6 +142,10 @@ public:
     const std::vector<std::string> &getNodes() const;
 
     std::vector<std::string> getNodes(const std::vector<long> &nodeIndexes) const;
+
+    void addCompositeNode(const std::string &compositeNode,
+                          const std::vector<int> &tokenizedCompositeNode,
+                          const std::string &relationship);
 
     void setNodeEmbeddingFileName(const std::string &path, bool loadEmbeddingToMem = true);
 
@@ -224,19 +239,11 @@ public:
                  const std::vector<std::vector<int>> &rankFocus = {},
                  const std::vector<std::vector<int>> &rankExclude = {}) const;
 
-    std::string getNodeTrie() const;
-
-    std::vector<std::pair<std::vector<int>, long>> getNodeMap() const;
-
     void save(const std::string &archivePath) const;
 
     void load(const std::string &archivePath, bool loadEmbeddingToMem = true);
 
 private:
-    struct VectorHash {
-        std::size_t operator()(std::vector<int> const &vec) const;
-    };
-
     struct PairHash {
         template<class T1, class T2>
         std::size_t operator()(const std::pair<T1, T2> &pair) const;
@@ -266,10 +273,6 @@ private:
         std::unordered_map<std::pair<long, long>, float, PairHash> sourceToTargetSimilarity;
         std::unordered_map<long, std::vector<size_t>> coveredSubGraph;
     };
-
-private:
-    Trie nodeTrie;
-    std::unordered_map<std::vector<int>, long, VectorHash> nodeMap;
 
 private:
     std::vector<int> edgeToAnnotation(size_t edgeIndex) const;
