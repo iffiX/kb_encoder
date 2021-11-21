@@ -9,7 +9,7 @@ from pytorch_lightning.utilities import rank_zero_only
 from .utils import collate_and_filter_outputs, set_worker_sharing_strategy
 from encoder.dataset.base import collate_function_dict_to_batch_encoding
 from encoder.dataset.openbook_qa import OpenBookQADataset
-from encoder.utils.config import OpenBookQATrainConfig
+from encoder.utils.config import OpenBookQATrainConfig, fix_missing
 from encoder.utils.settings import proxies, model_cache_dir, huggingface_mirror
 from encoder.utils.adafactor import Adafactor
 
@@ -25,6 +25,7 @@ class OpenBookQATrainer(pl.LightningModule):
         self.save_hyperparameters()
         warnings.filterwarnings("ignore")
 
+        fix_missing(config)
         self.config = config
         self.stage_result_path = stage_result_path
         self.is_distributed = is_distributed
@@ -42,6 +43,7 @@ class OpenBookQATrainer(pl.LightningModule):
             use_matcher=config.use_matcher,
             matcher_mode=config.matcher_mode,
             matcher_seed=config.seed,
+            matcher_config=config.matcher_config,
             include_option_label_in_sentence=config.include_option_label_in_sentence,
             include_option_label_in_answer_and_choices=config.include_option_label_in_answer_and_choices,
             use_option_label_as_answer_and_choices=config.use_option_label_as_answer_and_choices,
@@ -204,7 +206,7 @@ class OpenBookQATrainer(pl.LightningModule):
                 weight_decay=self.config.l2_regularization,
             )
         sch = t.optim.lr_scheduler.ReduceLROnPlateau(
-            optim, mode="max", factor=0.3, patience=0, min_lr=1e-6, verbose=True
+            optim, mode="max", factor=0.3, patience=0, min_lr=3e-5, verbose=True
         )
         return (
             [optim],

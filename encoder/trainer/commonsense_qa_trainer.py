@@ -9,7 +9,7 @@ from pytorch_lightning.utilities import rank_zero_only
 from .utils import collate_and_filter_outputs, set_worker_sharing_strategy
 from encoder.dataset.base import collate_function_dict_to_batch_encoding
 from encoder.dataset.commonsense_qa import CommonsenseQADataset
-from encoder.utils.config import CommonsenseQATrainConfig
+from encoder.utils.config import CommonsenseQATrainConfig, fix_missing
 from encoder.utils.settings import proxies, model_cache_dir, huggingface_mirror
 from encoder.utils.adafactor import Adafactor
 
@@ -24,7 +24,7 @@ class CommonsenseQATrainer(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         warnings.filterwarnings("ignore")
-
+        fix_missing(config)
         self.config = config
         self.stage_result_path = stage_result_path
         self.is_distributed = is_distributed
@@ -42,6 +42,7 @@ class CommonsenseQATrainer(pl.LightningModule):
             use_matcher=config.use_matcher,
             matcher_mode=config.matcher_mode,
             matcher_seed=config.seed,
+            matcher_config=config.matcher_config,
             include_option_label_in_sentence=config.include_option_label_in_sentence,
             include_option_label_in_answer_and_choices=config.include_option_label_in_answer_and_choices,
             use_option_label_as_answer_and_choices=config.use_option_label_as_answer_and_choices,

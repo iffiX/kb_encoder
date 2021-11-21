@@ -16,6 +16,23 @@ class BaseMatcher:
         "https://conceptnet.s3.amazonaws.com/downloads/2019/"
         "numberbatch/numberbatch-en-19.08.txt.gz"
     )
+    VERB_FILTER_SET = {
+        "do",
+        "did",
+        "does",
+        "done",
+        "have",
+        "having",
+        "has",
+        "had",
+        "be",
+        "am",
+        "is",
+        "are",
+        "being",
+        "was",
+        "were",
+    }
 
     def __init__(self, tokenizer: PreTrainedTokenizerBase, matcher: KnowledgeMatcher):
         self.tokenizer = tokenizer
@@ -247,6 +264,8 @@ class BaseMatcher:
         reduced by more than 50%
         """
         sentence_tokens, _ = self.tokenize_and_mask(sentence)
+        if len(match) == 0:
+            return self.tokenizer.decode(sentence_tokens)
         begin_tokens = self.tokenizer.encode(match_begin, add_special_tokens=False)
         end_tokens = self.tokenizer.encode(match_end, add_special_tokens=False)
         sep_tokens = self.tokenizer.encode(match_sep, add_special_tokens=False)
@@ -309,23 +328,7 @@ class BaseMatcher:
             use_mask = True
 
         tokens = nltk.word_tokenize(sentence)
-        filter_set = {
-            "do",
-            "did",
-            "does",
-            "done",
-            "have",
-            "having",
-            "has",
-            "had",
-            "be",
-            "am",
-            "is",
-            "are",
-            "being",
-            "was",
-            "were",
-        }
+
         offset = 0
         masks = []
         ids = []
@@ -340,7 +343,7 @@ class BaseMatcher:
                 pos.startswith("NN")
                 or pos.startswith("JJ")
                 or (pos.startswith("RB") and token.lower().endswith("ly"))
-                or (pos.startswith("VB") and token.lower() not in filter_set)
+                or (pos.startswith("VB") and token.lower() not in self.VERB_FILTER_SET)
             ):
                 allowed_tokens.append(token)
                 # noun, adjective, adverb, verb

@@ -57,6 +57,7 @@ class CommonsenseQATrainConfig(BaseModel):
 
     use_matcher: bool = True
     matcher_mode: str = "embedding"
+    matcher_config: Optional[dict] = None
     include_option_label_in_sentence: bool = False
     include_option_label_in_answer_and_choices: bool = False
     use_option_label_as_answer_and_choices: bool = False
@@ -87,6 +88,7 @@ class OpenBookQATrainConfig(BaseModel):
 
     use_matcher: bool = True
     matcher_mode: str = "embedding"
+    matcher_config: Optional[dict] = None
     include_option_label_in_sentence: bool = False
     include_option_label_in_answer_and_choices: bool = False
     use_option_label_as_answer_and_choices: bool = False
@@ -131,6 +133,9 @@ class GLUETrainConfig(BaseModel):
 class EnsembleTrainConfig(BaseModel):
     task_trainer_stage: str
     checkpoints: List[str]
+    matcher_modes_list: List[List[str]]
+    matcher_seeds_list: List[List[int]]
+    matcher_configs_list: List[List[dict]]
 
 
 class Config(BaseModel):
@@ -178,14 +183,22 @@ def load_config(path: str) -> Config:
     with open(path, "r") as f:
         config_dict = json.load(f)
         config = Config(
-            gpus=config_dict["gpus"],
-            early_stopping_patience=config_dict["early_stopping_patience"],
+            gpus=config_dict.get("gpus", 0),
+            early_stopping_patience=config_dict.get("early_stopping_patience", 100),
             working_directory=config_dict["working_directory"],
         )
         for s, c in zip(config_dict["stages"], config_dict["configs"]):
             config.stages.append(s)
             config.configs.append(stage_name_to_config(s, c))
         return config
+
+
+def fix_missing(config):
+    default = type(config)()
+    for k, v in default.__dict__.items():
+        if not hasattr(config, k):
+            setattr(config, k, v)
+    return config
 
 
 def generate_config(stages: List[str], path: str, print_config: bool = True):

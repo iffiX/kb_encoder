@@ -5,6 +5,7 @@
 #include "concept_net.h"
 #include "pybind11/pybind11.h"
 #include "fmt/format.h"
+#include "backward-cpp/backward.hpp"
 #include <omp.h>
 
 ///#define ENABLE_DEBUG
@@ -42,6 +43,7 @@ PYBIND11_MODULE(matcher, m) {
 #ifdef ENABLE_DEBUG
     signal(SIGSEGV, handler);
 #endif
+    backward::SignalHandling sh{};
     m.def("set_omp_max_threads", &set_omp_max_threads);
     py::class_<KnowledgeBase>(m, "KnowledgeBase")
             .def(py::init<>())
@@ -63,7 +65,11 @@ PYBIND11_MODULE(matcher, m) {
             .def("get_edges", &KnowledgeBase::getEdges)
             .def("get_nodes", py::overload_cast<>(&KnowledgeBase::getNodes, py::const_))
             .def("get_nodes", py::overload_cast<const std::vector<long> &>(&KnowledgeBase::getNodes, py::const_))
-            .def("add_composite_node", &KnowledgeBase::addCompositeNode)
+            .def("add_composite_node", &KnowledgeBase::addCompositeNode,
+                 py::arg("composite_node"),
+                 py::arg("relationship"),
+                 py::arg("tokenized_composite_node"),
+                 py::arg("mask") = std::vector<int>{})
             .def("set_node_embedding_file_name", &KnowledgeBase::setNodeEmbeddingFileName,
                  py::arg("path"),
                  py::arg("load_embedding_to_mem") = true)

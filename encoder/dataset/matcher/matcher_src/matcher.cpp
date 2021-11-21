@@ -328,8 +328,12 @@ vector<string> KnowledgeBase::getNodes(const vector<long> &nodeIndexes) const {
 }
 
 void KnowledgeBase::addCompositeNode(const string &compositeNode,
+                                     const string &relationship,
                                      const vector<int> &tokenizedCompositeNode,
-                                     const string &relationship) {
+                                     const vector<int> &mask) {
+    // Note: The similaity of the composite node to other nodes is computed by:
+    // the maximum sub node similarity to other nodes
+
     long relationId = -1;
     for (long relId = 0; relId < long(relationships.size()); relId++) {
         if (relationships[relId] == relationship) {
@@ -344,23 +348,56 @@ void KnowledgeBase::addCompositeNode(const string &compositeNode,
     nodes.emplace_back(compositeNode);
     tokenizedNodes.emplace_back(tokenizedCompositeNode);
     isNodeComposite.push_back(true);
+    // Do not update nodeMap and nodeTrie because it is a composite node
 
     // Find all sub-nodes occuring in the composite node
     // Then add an edge from all sub nodes to the composite node with relationship=relationship
 
-    // The similaity of the composite node to other nodes is computed by:
-    // the maximum sub node similarity to other nodes
+    if (not mask.empty() && mask.size() != tokenizedCompositeNode.size())
+        throw invalid_argument(fmt::format(
+                "Mask is provided for composite node but size does not match, composite node: {}, mask: {}",
+                tokenizedCompositeNode.size(), mask.size()));
+
     auto result = nodeTrie.matchForAll(tokenizedCompositeNode, false);
-    for(auto subNode : result) {
-        long edgeId = long(edges.size());
+    vector<long> components;
+    unordered_set<long> connectedSource;
+    for(auto &subNode : result) {
+        bool valid = true;
+        if (not mask.empty()) {
+            // Check if there exists any not masked position
+            valid = false;
+            for(size_t i = 0; i < subNode.second.back().size(); i++) {
+                if (mask[subNode.first + i] == 1) {
+                    valid = true;
+                    break;
+                }
+            }
+        }
+        if (not valid)
+            continue;
+
+        size_t edgeIndex = edges.size();
         long sourceNodeId = nodeMap.at(subNode.second.back());
-        edges.emplace_back(sourceNodeId, relationId, newNodeId, 1, "");
-        edgeToTarget.at(newNodeId).push_back(relationId);
-        edgeFromSource.at(sourceNodeId).push_back(relationId);
-        adjacency[sourceNodeId].insert(newNodeId);
+
+        if (connectedSource.find(sourceNodeId) != connectedSource.end())
+            continue;
+        components.push_back(sourceNodeId);
+        connectedSource.insert(sourceNodeId);
+        edges.emplace_back(Edge{sourceNodeId, relationId, newNodeId, 1, ""});
+        edgeToTarget[newNodeId].push_back(edgeIndex);
+        edgeFromSource[sourceNodeId].push_back(edgeIndex);
+        isEdgeDisabled.push_back(false);
         adjacency[newNodeId].insert(sourceNodeId);
+        adjacency[sourceNodeId].insert(newNodeId);
         tokenizedEdgeAnnotations.emplace_back(vector<int>{});
+#ifdef DEBUG
+        cout << fmt::format("Connecting node [{}:{}] to composite node [{}:{}] with relation [{}:{}]",
+                            nodes[sourceNodeId], sourceNodeId,
+                            nodes[newNodeId], newNodeId,
+                            relationships[relationId], relationId) << endl;
+#endif
     }
+    compositeNodes.emplace(newNodeId, components);
 }
 
 void KnowledgeBase::setNodeEmbeddingFileName(const string &path, bool loadEmbeddingToMem) {
@@ -482,17 +519,17 @@ void KnowledgeBase::initLandmarks(int seedNum, int landmarkNum, int seed, const 
 
 int KnowledgeBase::distance(long node1, long node2, bool fast) const {
     if (isNodeComposite[node1]) {
-        float min = -1;
+        int min = 1000000;
         for (long subNode : compositeNodes.at(node1)) {
-            float dist = distance(subNode, node2);
+            int dist = distance(subNode, node2);
             min = dist > min ? min : dist;
         }
         return min;
     }
     if (isNodeComposite[node2]) {
-        float min = -1;
+        int min = 1000000;
         for (long subNode : compositeNodes.at(node1)) {
-            float dist = distance(node1, subNode);
+            int dist = distance(node1, subNode);
             min = dist > min ? min : dist;
         }
         return min;
@@ -526,6 +563,7 @@ int KnowledgeBase::distance(long node1, long node2, bool fast) const {
 
 float KnowledgeBase::cosineSimilarity(long node1, long node2) const {
     if (isNodeComposite[node1]) {
+        // Minimum of cosine similarity is -1
         float max = -1;
         for (long subNode : compositeNodes.at(node1)) {
             float sim = cosineSimilarity(subNode, node2);
@@ -1051,10 +1089,18 @@ KnowledgeMatcher::matchByNode(const vector<int> &sourceSentence,
                 long otherNodeId = j < outSize ? get<2>(edge) : get<0>(edge);
 
                 if (kb.isEdgeDisabled[edgeIndex] ||
-                    (path.visitedNodes.find(otherNodeId) != path.visitedNodes.end()))
+                    (path.visitedNodes.find(otherNodeId) != path.visitedNodes.end())) {
                     sim[j] = 0;
+#ifdef DEBUG_DECISION
+                    cout << ("Skipping edge because: edge disabled [{}], node visited [{}]",
+                            kb.isEdgeDisabled[edgeIndex],
+                            path.visitedNodes.find(otherNodeId) != path.visitedNodes.end()) << endl;
+#endif
+                }
                 else {
-                    float simTmp = -1, simToEachTarget;
+                    // Minimum of distance similarity (1/distance) is 0
+                    // when distance appoaches infinity
+                    float simTmp = 0, simToEachTarget = 0;
                     long simTmpTarget = -1;
                     for (auto &tNode : targetNodes) {
                         if (rootNode != tNode.first) {
@@ -1272,12 +1318,21 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
                 long otherNodeId = j < outSize ? get<2>(edge) : get<0>(edge);
 
                 if (kb.isEdgeDisabled[edgeIndex] ||
-                    (path.visitedNodes.find(otherNodeId) != path.visitedNodes.end()))
+                    (path.visitedNodes.find(otherNodeId) != path.visitedNodes.end())) {
                     sim[j] = 0;
+#ifdef DEBUG_DECISION
+                    cout << ("Skipping edge because: edge disabled [{}], node visited [{}]",
+                             kb.isEdgeDisabled[edgeIndex],
+                             path.visitedNodes.find(otherNodeId) != path.visitedNodes.end()) << endl;
+#endif
+                }
                 else {
-                    float simTmp = -1, simToEachTarget;
+                    // Minimum of cosine similarity is -1
+                    float simTmp = -1, simToEachTarget = -1;
                     long simTmpTarget = -1;
                     for (auto &tNode : targetNodes) {
+                        // If root node is a target node to be compared, skip this node
+                        // to prevent selecting edges with no useful information
                         if (rootNode != tNode.first) {
                             auto simPair = make_pair(tNode.first, otherNodeId);
                             if (similarityCache.find(simPair) == similarityCache.end()) {
@@ -1288,12 +1343,13 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
                             }
                         }
                         else
-                            simToEachTarget = 0;
+                            simToEachTarget = -1;
                         if (simToEachTarget > simTmp) {
                             simTmpTarget = tNode.first;
                             simTmp = simToEachTarget;
                         }
                     }
+                    // Set to 0 since discrete_distribution requires non-negative weight
                     if (simTmp < discardEdgesIfSimilarityBelow)
                         simTmp = 0;
                     sim[j] = simTmp;
@@ -1508,11 +1564,17 @@ KnowledgeMatcher::matchByToken(const vector<int> &sourceSentence,
                                    kb.edgeToTarget.at(currentNode)[j - outSize];
                 auto &edge = kb.edges[edgeIndex];
                 // disable disabled edges, reflexive edges & path to visted nodes
+                long otherNodeId = j < outSize ? get<2>(edge) : get<0>(edge);
 
                 if (kb.isEdgeDisabled[edgeIndex] ||
-                    (j < outSize && path.visitedNodes.find(get<2>(edge)) != path.visitedNodes.end()) ||
-                    (j >= outSize && path.visitedNodes.find(get<0>(edge)) != path.visitedNodes.end()))
+                    (path.visitedNodes.find(otherNodeId) != path.visitedNodes.end())) {
                     sim[j] = 0;
+#ifdef DEBUG_DECISION
+                    cout << ("Skipping edge because: edge disabled [{}], node visited [{}]",
+                            kb.isEdgeDisabled[edgeIndex],
+                            path.visitedNodes.find(otherNodeId) != path.visitedNodes.end()) << endl;
+#endif
+                }
                 else {
                     float simTmp = similarity(edgeToAnnotation(edgeIndex), compareTarget);
                     if (simTmp < discardEdgesIfSimilarityBelow)

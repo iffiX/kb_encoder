@@ -2,6 +2,7 @@ import re
 import os
 import nltk
 import logging
+from nltk.corpus import wordnet
 from transformers import PreTrainedTokenizerBase
 from encoder.dataset.matcher import ConceptNetReader, KnowledgeMatcher
 from encoder.dataset.matcher.base import BaseMatcher
@@ -27,6 +28,7 @@ class OpenBookQAMatcher(BaseMatcher):
         nltk.download("stopwords")
         nltk.download("punkt")
         nltk.download("averaged_perceptron_tagger")
+        nltk.download("wordnet")
 
         assertion_path = str(
             os.path.join(dataset_cache_dir, "conceptnet-assertions.csv")
@@ -96,9 +98,10 @@ class OpenBookQAMatcher(BaseMatcher):
                 "FormOf",
             ]
         )
-        self.add_openbook_qa_knowledge()
-        # Add knowledge from openbook QA as composite nodes
         super(OpenBookQAMatcher, self).__init__(tokenizer, matcher)
+
+        # Add knowledge from openbook QA as composite nodes
+        self.add_openbook_qa_knowledge()
 
     def add_openbook_qa_knowledge(self):
         openbook_qa_path = os.path.join(
@@ -110,17 +113,23 @@ class OpenBookQAMatcher(BaseMatcher):
         )
         openbook_qa_facts_path = os.path.join(openbook_qa_path, "Main", "openbook.txt")
 
-        facts = []
         for path in (crowd_source_facts_path, openbook_qa_facts_path):
             with open(path, "r") as file:
                 for line in file:
-                    if line.startswith('"'):
-                        line = line[1:-1]
-                self.matcher.add_composite_node(
-                    line,
-                    "RelatedTo",
-                    self.tokenizer.encode(line, add_special_tokens=False),
-                )
+                    line = line.strip('"').strip("\n").strip(".")
+                    if len(line) < 3:
+                        continue
+                    self.matcher.kb.add_composite_node(
+                        line,
+                        "RelatedTo",
+                        self.tokenizer.encode(line, add_special_tokens=False),
+                    )
+                    # ids, mask = self.tokenize_and_mask(line)
+                    # self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
+
+    # def add_wordnet_definition(self):
+    #     for ss in wordnet.all_synsets():
+    #         print(f"{ss.lemma_names()}: {ss.definition()}")
 
     def __reduce__(self):
         return OpenBookQAMatcher, (self.tokenizer,)

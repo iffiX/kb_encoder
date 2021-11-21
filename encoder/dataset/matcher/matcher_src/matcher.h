@@ -1,8 +1,8 @@
 #ifndef MATCHER_H
 #define MATCHER_H
 // Uncomment below macro to enable viewing the decision process
-// #define DEBUG_DECISION
-// #define DEBUG
+//#define DEBUG_DECISION
+//#define DEBUG
 #include "cista.h"
 #include "highfive/H5File.hpp"
 #include "highfive/H5DataSet.hpp"
@@ -144,8 +144,9 @@ public:
     std::vector<std::string> getNodes(const std::vector<long> &nodeIndexes) const;
 
     void addCompositeNode(const std::string &compositeNode,
+                          const std::string &relationship,
                           const std::vector<int> &tokenizedCompositeNode,
-                          const std::string &relationship);
+                          const std::vector<int> &mask = {});
 
     void setNodeEmbeddingFileName(const std::string &path, bool loadEmbeddingToMem = true);
 
@@ -170,7 +171,7 @@ private:
     };
 
 private:
-    // For faster access
+    // For faster evaluation of function isNeighbor() and distance()
     std::unordered_map<long, std::unordered_set<long>> adjacency;
 
 private:

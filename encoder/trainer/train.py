@@ -94,9 +94,9 @@ def _train(
         + stage_trainer.monitor
         + "-{"
         + stage_trainer.monitor
-        + ":.2f}",
-        save_top_k=1 if stage_config.save else 0,
-        save_last=stage_config.save_last,
+        + ":.3f}",
+        save_top_k=1 if getattr(stage_config, "save", False) else 0,
+        save_last=getattr(stage_config, "save_last", False),
         monitor=stage_trainer.monitor,
         mode=stage_trainer.monitor_mode,
         verbose=True,
@@ -110,7 +110,7 @@ def _train(
     t_logger = TensorBoardLogger(log_path)
 
     checkpoint = None
-    if hasattr(stage_config, "load") and stage_config.load:
+    if getattr(stage_config, "load", False):
         checkpoint = find_checkpoint(
             checkpoint_path, stage_trainer.monitor, stage_trainer.monitor_mode
         )
@@ -131,11 +131,12 @@ def _train(
         logger=[t_logger],
         limit_train_batches=getattr(stage_config, "train_steps", None) or 1.0,
         limit_val_batches=getattr(stage_config, "validate_steps", None) or 1.0,
-        max_epochs=stage_config.epochs,
+        num_sanity_val_steps=0 if type(stage_trainer) == EnsembleTrainer else 2,
+        max_epochs=getattr(stage_config, "epochs", 1),
         # # For iterable datasets, to validate after each epoch,
         # # set check interval equal to number of training steps.
         # val_check_interval=stage_config.train_steps,
-        accumulate_grad_batches=stage_config.accumulate_grad_batches,
+        accumulate_grad_batches=getattr(stage_config, "accumulate_grad_batches", 1),
         resume_from_checkpoint=checkpoint,
         deterministic=True,
     )
@@ -152,8 +153,8 @@ def train(config: Config, stage_index: int, only_test: bool = False):
         isinstance(config.gpus, int) and config.gpus > 1
     )
     stage_config = config.configs[stage_index]
-    seed_everything(stage_config.seed, workers=True)
-    if stage_config.load_worker_num > 0:
+    seed_everything(getattr(stage_config, "seed", 42), workers=True)
+    if getattr(stage_config, "load_worker_num", 0) > 0:
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
     checkpoint_path = os.path.join(

@@ -34,8 +34,9 @@ class OpenBookQADataset:
         max_seq_length: int = 128,
         generate_length: int = 16,
         use_matcher: bool = False,
-        matcher_seed: int = -1,
         matcher_mode: str = "embedding",
+        matcher_seed: int = -1,
+        matcher_config: dict = None,
         include_option_label_in_sentence: bool = False,
         include_option_label_in_answer_and_choices: bool = False,
         use_option_label_as_answer_and_choices: bool = False,
@@ -51,6 +52,8 @@ class OpenBookQADataset:
         self.use_matcher = use_matcher
         self.matcher_mode = matcher_mode
         self.matcher_seed = matcher_seed
+        self.counter = 0
+        self.matcher_config = matcher_config
         self.include_option_label_in_sentence = include_option_label_in_sentence
         self.include_option_label_in_answer_and_choices = (
             include_option_label_in_answer_and_choices
@@ -147,29 +150,37 @@ class OpenBookQADataset:
             data = self.validate_data[index]
         else:
             data = self.test_data[index]
+        self.counter = (self.counter + 1) % 100000000
+        seed = (self.matcher_seed + self.counter) % 100000000
         if self.use_matcher:
             # prevent any modification to data, also prevent checkpoint storing
             # data to gpu by moving
             data = copy.deepcopy(data)
 
             if self.matcher_mode == "embedding":
+                matcher_config = self.matcher_config or {
+                    "max_times": 300,
+                    "max_depth": 1,
+                    "max_edges": 8,
+                    "discard_edges_if_similarity_below": 0.45,
+                }
                 match = self.matcher.match_by_node_embedding(
                     data["text_choices"],
                     target_sentence=data["text_question"],
-                    max_times=300,
-                    max_depth=2,
-                    max_edges=16,
-                    seed=self.matcher_seed,
-                    discard_edges_if_similarity_below=0.45,
+                    seed=seed,
+                    **matcher_config,
                 )
             elif self.matcher_mode == "token":
+                matcher_config = self.matcher_config or {
+                    "max_times": 300,
+                    "max_depth": 1,
+                    "max_edges": 8,
+                }
                 match = self.matcher.match_by_token(
                     data["text_choices"],
                     target_sentence=data["text_question"],
-                    max_times=300,
-                    max_depth=2,
-                    max_edges=12,
-                    seed=self.matcher_seed,
+                    seed=seed,
+                    **matcher_config,
                 )
             else:
                 raise ValueError(f"Invalid match mode {self.matcher_mode}")
@@ -252,7 +263,7 @@ class OpenBookQADataset:
         if self.match_closest_when_no_equal:
             print(f"Approximately correct ratio {float(approximately_correct) / total}")
 
-        save_inspect_data(answers, "commensense_qa_val_answers")
+        save_inspect_data(answers, "openbook_qa_val_answers")
         return {"accuracy": float(correct) / total}
 
     def generate_test_results_logits(self, logits: t.Tensor, directory: str):
@@ -327,6 +338,7 @@ class OpenBookQADataset:
                         entry["fact1"].capitalize()
                         + ". "
                         + entry["question"]["stem"]
+                        + "?"
                         + f" {sep} "
                         + sentence_choices
                     )
@@ -335,6 +347,7 @@ class OpenBookQADataset:
                         entry["fact1"].capitalize()
                         + ". "
                         + entry["question"]["stem"]
+                        + "?"
                         + f"  "
                         + sentence_choices
                     )
@@ -363,10 +376,11 @@ class OpenBookQADataset:
                 preprocessed = {
                     "sentence": encoded_sentence.input_ids,
                     "mask": encoded_sentence.attention_mask,
-                    "text_question": entry["question"]["stem"],
+                    "text_question": entry["fact1"].capitalize()
+                    + ". "
+                    + entry["question"]["stem"]
+                    + "?",
                     "text_choices": sentence_choices,
-                    # DEPRECATED, prepared for match by token, rank focus and exclude
-                    "question_match": [entry["question"]["question_concept"]],
                     "choices": choices,
                     "id": entry["id"],
                 }
@@ -449,21 +463,3 @@ class OpenBookQADataset:
         for option, choice in zip(options, choices):
             result += option + " " + choice + " "
         return result
-
-    def __reduce__(self):
-        return (
-            OpenBookQADataset,
-            (
-                self.tokenizer,
-                self.max_seq_length,
-                self.generate_length,
-                self.use_matcher,
-                self.matcher_seed,
-                self.matcher_mode,
-                self.include_option_label_in_sentence,
-                self.include_option_label_in_answer_and_choices,
-                self.insert_answers_at_end,
-                self.match_closest_when_no_equal,
-                self.regenerate,
-            ),
-        )

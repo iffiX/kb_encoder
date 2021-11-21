@@ -81,10 +81,18 @@ class DynamicIterableDataset(IterableDataset):
 
 class EmptyDataset(Dataset):
     def __getitem__(self, idx: int):
-        return None
+        return 0
 
     def __len__(self):
         return 0
+
+
+class SizeOnePlaceholderDataset(Dataset):
+    def __getitem__(self, idx: int):
+        return 0
+
+    def __len__(self):
+        return 1
 
 
 class MovableList(list):

@@ -19,14 +19,14 @@
                 "max_times": 300,
                 "max_depth": 2,
                 "max_edges": 16,
-                "discard_edges_if_similarity_below": 0.45
+                "discard_edges_if_similarity_below": 0.6
             },
-            "seed": 697474,
+            "seed": 9548547,
             "save": true
         }
     ],
     "early_stopping_patience": 10,
     "gpus": [0],
     "stages": ["commonsense_qa"],
-    "working_directory": "/home/muhan/data/workspace/kb_encoder/train_comm_qa_t5_3b_match_ensemble1"
+    "working_directory": "/home/muhan/data/workspace/kb_encoder/train_comm_qa_t5_3b_match_ensemble3"
 }

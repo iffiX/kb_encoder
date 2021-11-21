@@ -14,19 +14,13 @@
             "generate_length": 16,
             "optimizer_class": "Adafactor",
             "use_matcher": true,
-            "matcher_mode": "embedding",
-            "matcher_config": {
-                "max_times": 300,
-                "max_depth": 2,
-                "max_edges": 16,
-                "discard_edges_if_similarity_below": 0.45
-            },
-            "seed": 697474,
+            "matcher_mode": "none",
+            "seed": 491284,
             "save": true
         }
     ],
     "early_stopping_patience": 10,
     "gpus": [0],
     "stages": ["commonsense_qa"],
-    "working_directory": "/home/muhan/data/workspace/kb_encoder/train_comm_qa_t5_3b_match_ensemble1"
+    "working_directory": "/home/muhan/data/workspace/kb_encoder/train_comm_qa_t5_3b_match_ensemble4"
 }

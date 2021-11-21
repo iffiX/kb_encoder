@@ -1,0 +1,73 @@
+{
+    "configs": [
+        {
+            "task_trainer_stage": "commonsense_qa",
+            "checkpoints": [
+                "/home/muhan/data/workspace/kb_encoder/train_comm_qa_t5_3b_match_ensemble1/0/checkpoint/epoch=11-accuracy-accuracy=0.823.ckpt._sim0.6.bak",
+                "/home/muhan/data/workspace/kb_encoder/train_comm_qa_t5_3b_match_ensemble1/0/checkpoint/epoch=06-accuracy-accuracy=0.811.ckpt",
+                "/home/muhan/data/workspace/kb_encoder/train_comm_qa_t5_3b_match_ensemble3_token/0/checkpoint/epoch=02-accuracy-accuracy=0.80.ckpt",
+                "/home/muhan/data/workspace/kb_encoder/train_comm_qa_t5_3b_match_ensemble4/0/checkpoint/epoch=10-accuracy-accuracy=0.794.ckpt"
+            ],
+            "matcher_modes_list": [
+                ["embedding","embedding"],
+                ["embedding", "embedding"],
+                ["token", "token"],
+                ["none"]
+            ],
+            "matcher_seeds_list": [
+                [7981301, 4718902],
+                [3656959, 1398426],
+                [236398, 9218304],
+                [-1]
+            ],
+            "matcher_configs_list": [
+                [
+                    {
+                        "max_times": 300,
+                        "max_depth": 2,
+                        "max_edges": 16,
+                        "discard_edges_if_similarity_below": 0.45
+                    },
+                    {
+                        "max_times": 300,
+                        "max_depth": 3,
+                        "max_edges": 3,
+                        "discard_edges_if_similarity_below": 0.8
+                    }
+                ],
+                [
+                    {
+                        "max_times": 300,
+                        "max_depth": 2,
+                        "max_edges": 16,
+                        "discard_edges_if_similarity_below": 0.45
+                    },
+                    {
+                        "max_times": 300,
+                        "max_depth": 3,
+                        "max_edges": 3,
+                        "discard_edges_if_similarity_below": 0.8
+                    }
+                ],
+                [
+                    {
+                        "max_times": 300,
+                        "max_depth": 2,
+                        "max_edges": 16
+                    },
+                    {
+                        "max_times": 300,
+                        "max_depth": 3,
+                        "max_edges": 3
+                    }
+                ],
+                [
+                    {}
+                ]
+            ]
+        }
+    ],
+    "gpus": [0],
+    "stages": ["ensemble"],
+    "working_directory": "/home/muhan/data/workspace/kb_encoder/val_comm_qa_ensemble3"
+}

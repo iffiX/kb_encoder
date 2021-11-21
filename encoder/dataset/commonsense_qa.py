@@ -29,8 +29,9 @@ class CommonsenseQADataset:
         max_seq_length: int = 128,
         generate_length: int = 16,
         use_matcher: bool = False,
-        matcher_seed: int = -1,
         matcher_mode: str = "embedding",
+        matcher_seed: int = -1,
+        matcher_config: dict = None,
         include_option_label_in_sentence: bool = False,
         include_option_label_in_answer_and_choices: bool = False,
         use_option_label_as_answer_and_choices: bool = False,
@@ -46,6 +47,7 @@ class CommonsenseQADataset:
         self.use_matcher = use_matcher
         self.matcher_mode = matcher_mode
         self.matcher_seed = matcher_seed
+        self.matcher_config = matcher_config
         self.include_option_label_in_sentence = include_option_label_in_sentence
         self.include_option_label_in_answer_and_choices = (
             include_option_label_in_answer_and_choices
@@ -135,24 +137,32 @@ class CommonsenseQADataset:
             data = copy.deepcopy(data)
 
             if self.matcher_mode == "embedding":
+                matcher_config = self.matcher_config or {
+                    "max_times": 300,
+                    "max_depth": 2,
+                    "max_edges": 16,
+                    "discard_edges_if_similarity_below": 0.45,
+                }
                 match = self.matcher.match_by_node_embedding(
                     data["text_choices"],
                     target_sentence=data["text_question"],
-                    max_times=300,
-                    max_depth=2,
-                    max_edges=16,
                     seed=self.matcher_seed,
-                    discard_edges_if_similarity_below=0.45,
+                    **matcher_config,
                 )
             elif self.matcher_mode == "token":
+                matcher_config = self.matcher_config or {
+                    "max_times": 300,
+                    "max_depth": 2,
+                    "max_edges": 12,
+                }
                 match = self.matcher.match_by_token(
                     data["text_choices"],
                     target_sentence=data["text_question"],
-                    max_times=300,
-                    max_depth=2,
-                    max_edges=12,
                     seed=self.matcher_seed,
+                    **matcher_config,
                 )
+            elif self.matcher_mode == "none":
+                match = {}
             else:
                 raise ValueError(f"Invalid match mode {self.matcher_mode}")
 
@@ -429,21 +439,3 @@ class CommonsenseQADataset:
         for option, choice in zip(options, choices):
             result += option + " " + choice + " "
         return result
-
-    def __reduce__(self):
-        return (
-            CommonsenseQADataset,
-            (
-                self.tokenizer,
-                self.max_seq_length,
-                self.generate_length,
-                self.use_matcher,
-                self.matcher_seed,
-                self.matcher_mode,
-                self.include_option_label_in_sentence,
-                self.include_option_label_in_answer_and_choices,
-                self.insert_answers_at_end,
-                self.match_closest_when_no_equal,
-                self.regenerate,
-            ),
-        )
