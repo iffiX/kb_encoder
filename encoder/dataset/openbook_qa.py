@@ -52,7 +52,6 @@ class OpenBookQADataset:
         self.use_matcher = use_matcher
         self.matcher_mode = matcher_mode
         self.matcher_seed = matcher_seed
-        self.counter = 0
         self.matcher_config = matcher_config
         self.include_option_label_in_sentence = include_option_label_in_sentence
         self.include_option_label_in_answer_and_choices = (
@@ -150,8 +149,6 @@ class OpenBookQADataset:
             data = self.validate_data[index]
         else:
             data = self.test_data[index]
-        self.counter = (self.counter + 1) % 100000000
-        seed = (self.matcher_seed + self.counter) % 100000000
         if self.use_matcher:
             # prevent any modification to data, also prevent checkpoint storing
             # data to gpu by moving
@@ -167,7 +164,7 @@ class OpenBookQADataset:
                 match = self.matcher.match_by_node_embedding(
                     data["text_choices"],
                     target_sentence=data["text_question"],
-                    seed=seed,
+                    seed=self.matcher_seed,
                     **matcher_config,
                 )
             elif self.matcher_mode == "token":
@@ -179,7 +176,7 @@ class OpenBookQADataset:
                 match = self.matcher.match_by_token(
                     data["text_choices"],
                     target_sentence=data["text_question"],
-                    seed=seed,
+                    seed=self.matcher_seed,
                     **matcher_config,
                 )
             else:

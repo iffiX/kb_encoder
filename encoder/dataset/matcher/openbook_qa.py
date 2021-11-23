@@ -102,8 +102,10 @@ class OpenBookQAMatcher(BaseMatcher):
 
         # Add knowledge from openbook QA as composite nodes
         self.add_openbook_qa_knowledge()
+        # self.add_wordnet_definition()
 
     def add_openbook_qa_knowledge(self):
+        logging.info("Adding OpenBook QA knowledge")
         openbook_qa_path = os.path.join(
             dataset_cache_dir, "openbook_qa", "OpenBookQA-V1-Sep2018", "Data"
         )
@@ -124,12 +126,33 @@ class OpenBookQAMatcher(BaseMatcher):
                         "RelatedTo",
                         self.tokenizer.encode(line, add_special_tokens=False),
                     )
+                    # Adding mask will cause worse performance
                     # ids, mask = self.tokenize_and_mask(line)
                     # self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
 
-    # def add_wordnet_definition(self):
-    #     for ss in wordnet.all_synsets():
-    #         print(f"{ss.lemma_names()}: {ss.definition()}")
+    def add_wordnet_definition(self):
+        logging.info("Adding wordnet definition")
+        added = set()
+        for ss in wordnet.all_synsets():
+            s = [ln.replace("_", " ").lower() for ln in ss.lemma_names()]
+            definition = (
+                ss.definition()
+                .replace("(", ",")
+                .replace(")", ",")
+                .replace(";", ",")
+                .replace('"', " ")
+                .lower()
+            )
+            knowledge = f"{','.join(s)} is defined as {definition}"
+
+            if len(knowledge) > 100:
+                # if trim_index = -1 this will also work, but not trimming anything
+                trim_index = knowledge.find(" ", 100)
+                knowledge = knowledge[:trim_index]
+            if knowledge not in added:
+                added.add(knowledge)
+                ids, mask = self.tokenize_and_mask(knowledge)
+                self.matcher.kb.add_composite_node(knowledge, "RelatedTo", ids, mask)
 
     def __reduce__(self):
         return OpenBookQAMatcher, (self.tokenizer,)

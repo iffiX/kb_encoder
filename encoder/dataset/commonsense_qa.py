@@ -8,7 +8,7 @@ import numpy as np
 import torch as t
 from typing import List
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, BatchEncoding
-from encoder.dataset.matcher.concept_net import ConceptNetMatcher
+from encoder.dataset.matcher.commonsense_qa import CommonsenseQAMatcher
 from encoder.utils.settings import (
     dataset_cache_dir,
     preprocess_cache_dir,
@@ -58,7 +58,7 @@ class CommonsenseQADataset:
         )
         self.match_closest_when_no_equal = match_closest_when_no_equal
         self.regenerate = regenerate
-        self.matcher = ConceptNetMatcher(tokenizer=self.matcher_tokenizer)
+        self.matcher = CommonsenseQAMatcher(tokenizer=self.matcher_tokenizer)
 
         base = os.path.join(dataset_cache_dir, "commonsense_qa")
         train_path = os.path.join(base, "train.jsonl")
@@ -214,16 +214,21 @@ class CommonsenseQADataset:
             sentence = self.tokenizer.decode(
                 batch["sentence"][i], skip_special_tokens=True
             )
-            print(
-                f"sentence: [{sentence}] \n"
-                f"answer: [{answer}] \n"
-                f"ref_answer: [{ref_answer}]"
-            )
+            # print(
+            #     f"sentence: [{sentence}] \n"
+            #     f"answer: [{answer}] \n"
+            #     f"ref_answer: [{ref_answer}]"
+            # )
             answers[batch["id"][i]] = False
             if answer == ref_answer:
                 correct += 1
                 answers[batch["id"][i]] = True
             elif answer not in batch["choices"][i]:
+                print(
+                    f"sentence: [{sentence}] \n"
+                    f"answer: [{answer}] \n"
+                    f"ref_answer: [{ref_answer}]"
+                )
                 if self.match_closest_when_no_equal:
                     # Gestalt Pattern Matching
                     # https://en.wikipedia.org/wiki/Gestalt_Pattern_Matching
@@ -239,6 +244,12 @@ class CommonsenseQADataset:
                         answers[batch["id"][i]] = True
                 else:
                     missing += 1
+            else:
+                print(
+                    f"sentence: [{sentence}] \n"
+                    f"answer: [{answer}] \n"
+                    f"ref_answer: [{ref_answer}]"
+                )
 
         print(f"Missing ratio {float(missing) / total}")
         if self.match_closest_when_no_equal:
