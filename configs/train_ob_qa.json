@@ -16,10 +16,11 @@
             "use_matcher": true,
             "matcher_mode": "embedding",
             "matcher_config": {
-                "max_times": 300,
-                "max_depth": 1,
+                "max_times": 1000,
+                "max_depth": 2,
                 "max_edges": 6,
-                "discard_edges_if_similarity_below": 0.45
+                "discard_edges_if_similarity_below": 0.45,
+                "discard_edges_if_rank_below": 0.7
             },
             "seed": 697474,
             "save": true

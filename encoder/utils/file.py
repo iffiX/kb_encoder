@@ -44,3 +44,7 @@ def decompress_gz(path_from, path_to):
 def decompress_zip(path_from, dir_path_to):
     with zipfile.ZipFile(path_from, "r") as zip_ref:
         zip_ref.extractall(dir_path_to)
+
+
+def decompress_tar_gz(path_from, dir_path_to):
+    shutil.unpack_archive(path_from, dir_path_to, "gztar")

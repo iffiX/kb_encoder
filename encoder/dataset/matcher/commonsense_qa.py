@@ -88,75 +88,76 @@ class CommonsenseQAMatcher(BaseMatcher):
             ]
         )
         super(CommonsenseQAMatcher, self).__init__(tokenizer, matcher)
-        self.add_wordnet_definition()
-        self.add_generics_kb()
+        # self.add_wordnet_definition()
+        # self.add_generics_kb()
 
-    def add_generics_kb(self):
-        logging.info("Adding generics kb")
-        path = str(os.path.join(dataset_cache_dir, "generics_kb"))
-        os.makedirs(path, exist_ok=True)
-        if not os.path.exists(os.path.join(path, "GenericsKB-Best.tsv")):
-            logging.info("Skipping loading generics_kb because file is not loaded")
-            logging.info(
-                f"Please download GenericsKB-Best.tsv "
-                f"from https://drive.google.com/drive/folders/1vqfVXhJXJWuiiXbUa4rZjOgQoJvwZUoT "
-                f"to path {os.path.join(path, 'GenericsKB-Best.tsv')}"
-            )
-        gkb = datasets.load_dataset("generics_kb", "generics_kb_best", data_dir=path,)
-        added = set()
-        for entry in gkb["train"]:
-            if (
-                "ConceptNet" in entry["source"]
-                or "WordNet" in entry["source"]
-                or entry["generic_sentence"].count(" ") < 3
-            ):
-                continue
-            knowledge = (
-                entry["generic_sentence"]
-                .strip(".")
-                .replace("(", ",")
-                .replace(")", ",")
-                .replace(";", ",")
-                .replace('"', " ")
-                .lower()
-            )
-            if knowledge not in added:
-                added.add(knowledge)
-                self.matcher.kb.add_composite_node(
-                    knowledge,
-                    "RelatedTo",
-                    self.tokenizer.encode(knowledge, add_special_tokens=False),
-                )
-        logging.info(f"Added {len(added)} composite nodes")
-
-    def add_wordnet_definition(self):
-        logging.info("Adding wordnet definition")
-        added = set()
-        for ss in wordnet.all_synsets():
-            s = [ln.replace("_", " ").lower() for ln in ss.lemma_names()]
-            definition = (
-                ss.definition()
-                .replace("(", ",")
-                .replace(")", ",")
-                .replace(";", ",")
-                .replace('"', " ")
-                .lower()
-            )
-            knowledge = f"{','.join(s)} is defined as {definition}"
-
-            if len(knowledge) > 100:
-                # if trim_index = -1 this will also work, but not trimming anything
-                trim_index = knowledge.find(" ", 100)
-                knowledge = knowledge[:trim_index]
-            if knowledge not in added:
-                added.add(knowledge)
-                self.matcher.kb.add_composite_node(
-                    knowledge,
-                    "RelatedTo",
-                    self.tokenizer.encode(knowledge, add_special_tokens=False),
-                )
-                # ids, mask = self.tokenize_and_mask(knowledge)
-                # self.matcher.kb.add_composite_node(knowledge, "RelatedTo", ids, mask)
+    # def add_generics_kb(self):
+    #     logging.info("Adding generics kb")
+    #     path = str(os.path.join(dataset_cache_dir, "generics_kb"))
+    #     os.makedirs(path, exist_ok=True)
+    #     if not os.path.exists(os.path.join(path, "GenericsKB-Best.tsv")):
+    #         logging.info("Skipping loading generics_kb because file is not loaded")
+    #         logging.info(
+    #             f"Please download GenericsKB-Best.tsv "
+    #             f"from https://drive.google.com/drive/folders/1vqfVXhJXJWuiiXbUa4rZjOgQoJvwZUoT "
+    #             f"to path {os.path.join(path, 'GenericsKB-Best.tsv')}"
+    #         )
+    #     gkb = datasets.load_dataset("generics_kb", "generics_kb_best", data_dir=path,)
+    #     added = set()
+    #     for entry in gkb["train"]:
+    #         if (
+    #             "ConceptNet" in entry["source"]
+    #             or "WordNet" in entry["source"]
+    #             or entry["generic_sentence"].count(" ") < 3
+    #         ):
+    #             continue
+    #         knowledge = (
+    #             entry["generic_sentence"]
+    #             .strip(".")
+    #             .replace("(", ",")
+    #             .replace(")", ",")
+    #             .replace(";", ",")
+    #             .replace('"', " ")
+    #             .lower()
+    #         )
+    #         if knowledge not in added:
+    #             added.add(knowledge)
+    #             self.matcher.kb.add_composite_node(
+    #                 knowledge,
+    #                 "RelatedTo",
+    #                 self.tokenizer.encode(knowledge, add_special_tokens=False),
+    #             )
+    #     logging.info(f"Added {len(added)} composite nodes")
+    #
+    # def add_wordnet_definition(self):
+    #     logging.info("Adding wordnet definition")
+    #     added = set()
+    #     for ss in wordnet.all_synsets():
+    #         s = [ln.replace("_", " ").lower() for ln in ss.lemma_names()]
+    #         definition = (
+    #             ss.definition()
+    #             .replace("(", ",")
+    #             .replace(")", ",")
+    #             .replace(";", ",")
+    #             .replace('"', " ")
+    #             .lower()
+    #         )
+    #         knowledge = f"{','.join(s)} is defined as {definition}"
+    #
+    #         if len(knowledge) > 100:
+    #             # if trim_index = -1 this will also work, but not trimming anything
+    #             trim_index = knowledge.find(" ", 100)
+    #             knowledge = knowledge[:trim_index]
+    #         if knowledge not in added:
+    #             added.add(knowledge)
+    #             self.matcher.kb.add_composite_node(
+    #                 knowledge,
+    #                 "RelatedTo",
+    #                 self.tokenizer.encode(knowledge, add_special_tokens=False),
+    #             )
+    #             # ids, mask = self.tokenize_and_mask(knowledge)
+    #             # self.matcher.kb.add_composite_node(knowledge, "RelatedTo", ids, mask)
+    #     logging.info(f"Added {len(added)} composite nodes")
 
     def __reduce__(self):
         return CommonsenseQAMatcher, (self.tokenizer,)

@@ -131,6 +131,8 @@ public:
 
     void clearDisabledEdges();
 
+    void disableAllEdges();
+
     void disableEdgesOfRelationships(const std::vector<std::string> &relationships);
 
     void disableEdgesOfNodes(const std::vector<std::string> &nodes);
@@ -178,6 +180,8 @@ private:
     void loadEmbedding(bool loadEmbeddingToMem);
 
     void loadAdjacency();
+
+    void connectCompositeNodeToSubNode(long sourceNodeId, long relationId, long newNodeId);
 
     bool isNeighbor(long node1, long node2) const;
 
@@ -250,11 +254,6 @@ private:
         std::size_t operator()(const std::pair<T1, T2> &pair) const;
     };
 
-    struct UndirectedPairHash {
-        template<class T1, class T2>
-        std::size_t operator()(const std::pair<T1, T2> &pair) const;
-    };
-
     struct VisitedPath {
         long root;
         int matchedFocusCount;
@@ -270,6 +269,7 @@ private:
 
     struct VisitedSubGraph {
         std::vector<VisitedPath> visitedPaths;
+        std::unordered_set<long> coveredCompositeNodes;
         std::unordered_set<std::pair<long, long>, PairHash> coveredNodePairs;
         std::unordered_map<std::pair<long, long>, float, PairHash> sourceToTargetSimilarity;
         std::unordered_map<long, std::vector<size_t>> coveredSubGraph;
@@ -287,6 +287,11 @@ private:
                                  std::unordered_map<size_t, std::vector<int>> &sourceMatch,
                                  std::unordered_map<size_t, std::vector<int>> &targetMatch) const;
 
+    void normalizeMatch(std::unordered_map<size_t, std::vector<int>> &match,
+                        const std::vector<int> &mask,
+                        size_t position,
+                        const std::vector<int> &node) const;
+
     MatchResult selectPaths(VisitedSubGraph &visitedSubGraph,
                             const std::unordered_map<long, std::pair<size_t, size_t>> &posRef,
                             int maxEdges,
@@ -295,6 +300,7 @@ private:
     void trimPath(VisitedPath &path) const;
 
     void updatePath(VisitedPath &path,
+                    const std::unordered_set<long> &coveredCompositeNodes,
                     const std::unordered_set<std::pair<long, long>, PairHash> &coveredNodePairs,
                     const std::unordered_map<std::pair<long, long>, float, PairHash> &sourceToTargetSimilarity,
                     int remainingEdges) const;

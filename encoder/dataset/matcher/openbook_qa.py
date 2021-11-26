@@ -28,7 +28,6 @@ class OpenBookQAMatcher(BaseMatcher):
         nltk.download("stopwords")
         nltk.download("punkt")
         nltk.download("averaged_perceptron_tagger")
-        nltk.download("wordnet")
 
         assertion_path = str(
             os.path.join(dataset_cache_dir, "conceptnet-assertions.csv")
@@ -36,13 +35,13 @@ class OpenBookQAMatcher(BaseMatcher):
         numberbatch_path = str(
             os.path.join(dataset_cache_dir, "conceptnet-numberbatch.txt")
         )
-        openbook_qa_path = str(os.path.join(dataset_cache_dir, "openbook_qa"))
         embedding_path = str(
             os.path.join(preprocess_cache_dir, "conceptnet-embedding.hdf5")
         )
         archive_path = str(
             os.path.join(preprocess_cache_dir, "conceptnet-archive.data")
         )
+        openbook_qa_path = str(os.path.join(dataset_cache_dir, "openbook_qa"))
 
         for task, data_path, url in (
             ("assertions", assertion_path, self.ASSERTION_URL),
@@ -90,69 +89,115 @@ class OpenBookQAMatcher(BaseMatcher):
             matcher = KnowledgeMatcher(archive_path)
 
         # Disable relations of similar word forms
-        matcher.kb.disable_edges_of_relationships(
-            [
-                "DerivedFrom",
-                "EtymologicallyDerivedFrom",
-                "EtymologicallyRelatedTo",
-                "FormOf",
-            ]
-        )
+        # matcher.kb.disable_edges_of_relationships(
+        #     [
+        #         "DerivedFrom",
+        #         "EtymologicallyDerivedFrom",
+        #         "EtymologicallyRelatedTo",
+        #         "FormOf",
+        #     ]
+        # )
+        # matcher.kb.disable_edges_of_relationships(
+        #     [
+        #         "Antonym",
+        #         "AtLocation",
+        #         "CapableOf",
+        #         "Causes",
+        #         "CausesDesire",
+        #         "CreatedBy",
+        #         "DefinedAs",
+        #         # "DerivedFrom",
+        #         "Desires",
+        #         "DistinctFrom",
+        #         "Entails",
+        #         "EtymologicallyDerivedFrom",
+        #         "EtymologicallyRelatedTo",
+        #         # "FormOf",
+        #         "HasA",
+        #         "HasContext",
+        #         "HasFirstSubevent",
+        #         "HasLastSubevent",
+        #         "HasPrerequisite",
+        #         "HasProperty",
+        #         "HasSubevent",
+        #         # "InstanceOf",
+        #         # "IsA",
+        #         "LocatedNear",
+        #         "MadeOf",
+        #         "MannerOf",
+        #         "MotivatedByGoal",
+        #         "NotCapableOf",
+        #         "NotDesires",
+        #         "NotHasProperty",
+        #         "PartOf",
+        #         "ReceivesAction",
+        #         "RelatedTo",
+        #         "SimilarTo",
+        #         "SymbolOf",
+        #         "Synonym",
+        #         "UsedFor",
+        #         "capital",
+        #         "field",
+        #         "genre",
+        #         "genus",
+        #         "influencedBy",
+        #         "knownFor",
+        #         "language",
+        #         "leader",
+        #         "occupation",
+        #         "product",
+        #     ]
+        # )
+        # matcher.kb.disable_all_edges()
         super(OpenBookQAMatcher, self).__init__(tokenizer, matcher)
 
         # Add knowledge from openbook QA as composite nodes
         self.add_openbook_qa_knowledge()
-        # self.add_wordnet_definition()
 
     def add_openbook_qa_knowledge(self):
         logging.info("Adding OpenBook QA knowledge")
+        # openbook_qa_path = os.path.join(
+        #     dataset_cache_dir, "openbook_qa", "OpenBookQA-V1-Sep2018", "Data"
+        # )
+        #
+        # crowd_source_facts_path = os.path.join(
+        #     openbook_qa_path, "Additional", "crowdsourced-facts.txt"
+        # )
+        # openbook_qa_facts_path = os.path.join(openbook_qa_path, "Main", "openbook.txt")
+        #
+        # count = 0
+        # for path in (crowd_source_facts_path, openbook_qa_facts_path):
+        #     with open(path, "r") as file:
+        #         for line in file:
+        #             line = line.strip('"').strip("\n").strip(".")
+        #             if len(line) < 3:
+        #                 continue
+        #             count += 1
+        #             self.matcher.kb.add_composite_node(
+        #                 line,
+        #                 "RelatedTo",
+        #                 self.tokenizer.encode(line, add_special_tokens=False),
+        #             )
+        #             # Adding mask will cause worse performance
+        #             # ids, mask = self.tokenize_and_mask(line)
+        #             # self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
         openbook_qa_path = os.path.join(
             dataset_cache_dir, "openbook_qa", "OpenBookQA-V1-Sep2018", "Data"
         )
 
-        crowd_source_facts_path = os.path.join(
-            openbook_qa_path, "Additional", "crowdsourced-facts.txt"
-        )
         openbook_qa_facts_path = os.path.join(openbook_qa_path, "Main", "openbook.txt")
 
-        for path in (crowd_source_facts_path, openbook_qa_facts_path):
+        count = 0
+        for path in (openbook_qa_facts_path,):
             with open(path, "r") as file:
                 for line in file:
-                    line = line.strip('"').strip("\n").strip(".")
+                    line = line.strip("\n").strip(".").strip('"').strip("'")
                     if len(line) < 3:
                         continue
-                    self.matcher.kb.add_composite_node(
-                        line,
-                        "RelatedTo",
-                        self.tokenizer.encode(line, add_special_tokens=False),
-                    )
-                    # Adding mask will cause worse performance
-                    # ids, mask = self.tokenize_and_mask(line)
-                    # self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
-
-    def add_wordnet_definition(self):
-        logging.info("Adding wordnet definition")
-        added = set()
-        for ss in wordnet.all_synsets():
-            s = [ln.replace("_", " ").lower() for ln in ss.lemma_names()]
-            definition = (
-                ss.definition()
-                .replace("(", ",")
-                .replace(")", ",")
-                .replace(";", ",")
-                .replace('"', " ")
-                .lower()
-            )
-            knowledge = f"{','.join(s)} is defined as {definition}"
-
-            if len(knowledge) > 100:
-                # if trim_index = -1 this will also work, but not trimming anything
-                trim_index = knowledge.find(" ", 100)
-                knowledge = knowledge[:trim_index]
-            if knowledge not in added:
-                added.add(knowledge)
-                ids, mask = self.tokenize_and_mask(knowledge)
-                self.matcher.kb.add_composite_node(knowledge, "RelatedTo", ids, mask)
+                    count += 1
+                    ids, mask = self.tokenize_and_mask(line)
+                    self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
+        logging.info(f"Added {count} composite nodes")
 
     def __reduce__(self):
         return OpenBookQAMatcher, (self.tokenizer,)

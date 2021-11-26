@@ -273,7 +273,7 @@ class BaseMatcher:
         for pos, (_, edges, weights) in match.items():
             new_edges = []
             for i, (edge, weight) in enumerate(zip(edges, weights)):
-                if i == 0:
+                if not insert_at_end and i == 0:
                     new_edges += begin_tokens
                 if include_weights:
                     new_edges += edge + self.tokenizer.encode(
@@ -281,7 +281,7 @@ class BaseMatcher:
                     )
                 else:
                     new_edges += edge
-                if i == len(edges) - 1:
+                if not insert_at_end and i == len(edges) - 1:
                     new_edges += end_tokens
                 else:
                     new_edges += sep_tokens
@@ -291,8 +291,10 @@ class BaseMatcher:
         )  # type: List[Tuple[int, List[int]]]
         sorted_matches = sorted(sorted_matches, key=lambda x: x[0])
         if insert_at_end:
+            sentence_tokens += begin_tokens
             for m in sorted_matches:
                 sentence_tokens = sentence_tokens + m[1]
+            sentence_tokens += end_tokens
         else:
             offset = 0
             for m in sorted_matches:

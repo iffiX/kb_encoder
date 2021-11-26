@@ -66,6 +66,7 @@ class OpenBookQADataset:
         self.matcher = OpenBookQAMatcher(tokenizer=self.matcher_tokenizer)
 
         openbook_qa_path = os.path.join(dataset_cache_dir, "openbook_qa")
+        # Note: fact is not directly used in train/test/validation
         train_path = os.path.join(
             openbook_qa_path,
             "OpenBookQA-V1-Sep2018",
@@ -162,10 +163,13 @@ class OpenBookQADataset:
                     "discard_edges_if_similarity_below": 0.45,
                 }
                 match = self.matcher.match_by_node_embedding(
-                    data["text_choices"],
+                    data["text_question"],
                     target_sentence=data["text_question"],
                     seed=self.matcher_seed,
                     **matcher_config,
+                )
+                new_question = self.matcher.insert_match(
+                    data["text_question"], match, insert_at_end=True
                 )
             elif self.matcher_mode == "token":
                 matcher_config = self.matcher_config or {
@@ -173,21 +177,23 @@ class OpenBookQADataset:
                     "max_depth": 1,
                     "max_edges": 8,
                 }
-                match = self.matcher.match_by_token(
-                    data["text_choices"],
-                    target_sentence=data["text_question"],
+                match = self.matcher.match_by_node_embedding(
+                    data["text_question"],
+                    target_sentence=data["text_question"] + " " + data["text_choices"],
                     seed=self.matcher_seed,
                     **matcher_config,
                 )
+                new_question = self.matcher.insert_match(
+                    data["text_question"], match, insert_at_end=True
+                )
+            elif self.matcher_mode == "none":
+                new_question = data["text_question"]
             else:
                 raise ValueError(f"Invalid match mode {self.matcher_mode}")
 
-            new_choices = self.matcher.insert_match(
-                data["text_choices"], match, insert_at_end=self.insert_answers_at_end
-            )
             encoded_sentence = self.tokenizer(
-                data["text_question"],
-                new_choices,
+                new_question,
+                data["text_choices"],
                 padding="max_length",
                 max_length=self.max_seq_length,
                 truncation=True,
@@ -230,16 +236,16 @@ class OpenBookQADataset:
             sentence = self.tokenizer.decode(
                 batch["sentence"][i], skip_special_tokens=True
             )
-            print(
-                f"sentence: [{sentence}] \n"
-                f"answer: [{answer}] \n"
-                f"ref_answer: [{ref_answer}]"
-            )
             answers[batch["id"][i]] = False
             if answer == ref_answer:
                 correct += 1
                 answers[batch["id"][i]] = True
             elif answer not in batch["choices"][i]:
+                print(
+                    f"sentence: [{sentence}] \n"
+                    f"wrong answer: [{answer}] \n"
+                    f"ref_answer: [{ref_answer}]"
+                )
                 if self.match_closest_when_no_equal:
                     # Gestalt Pattern Matching
                     # https://en.wikipedia.org/wiki/Gestalt_Pattern_Matching
@@ -255,6 +261,12 @@ class OpenBookQADataset:
                         answers[batch["id"][i]] = True
                 else:
                     missing += 1
+            else:
+                print(
+                    f"sentence: [{sentence}] \n"
+                    f"wrong answer: [{answer}] \n"
+                    f"ref_answer: [{ref_answer}]"
+                )
 
         print(f"Missing ratio {float(missing) / total}")
         if self.match_closest_when_no_equal:
@@ -274,7 +286,7 @@ class OpenBookQADataset:
                     f"Label size {len(labels)} does not match "
                     f"test size {len(self.test_data)}"
                 )
-            answer_keys = ["A", "B", "C", "D", "E"]
+            answer_keys = ["A", "B", "C", "D"]
             for label, preprocessed in zip(labels, self.test_data):
                 file.write(f"{preprocessed['id']},{answer_keys[label]}")
 
@@ -288,7 +300,7 @@ class OpenBookQADataset:
                     f"Token size {tokens.shape[0]} does not match "
                     f"test size {len(self.test_data)}"
                 )
-            answer_keys = ["A", "B", "C", "D", "E"]
+            answer_keys = ["A", "B", "C", "D"]
             for answer_tokens, preprocessed in zip(tokens, self.test_data):
                 answer = self.tokenizer.decode(answer_tokens, skip_special_tokens=True)
                 for i, choice in enumerate(preprocessed["choices"]):
@@ -332,21 +344,11 @@ class OpenBookQADataset:
 
                 if sep is not None:
                     org_sentence = (
-                        entry["fact1"].capitalize()
-                        + ". "
-                        + entry["question"]["stem"]
-                        + "?"
-                        + f" {sep} "
-                        + sentence_choices
+                        entry["question"]["stem"] + "?" + f" {sep} " + sentence_choices
                     )
                 else:
                     org_sentence = (
-                        entry["fact1"].capitalize()
-                        + ". "
-                        + entry["question"]["stem"]
-                        + "?"
-                        + f"  "
-                        + sentence_choices
+                        entry["question"]["stem"] + "?" + f"  " + sentence_choices
                     )
                 encoded_sentence = self.tokenizer(
                     org_sentence,
@@ -373,11 +375,9 @@ class OpenBookQADataset:
                 preprocessed = {
                     "sentence": encoded_sentence.input_ids,
                     "mask": encoded_sentence.attention_mask,
-                    "text_question": entry["fact1"].capitalize()
-                    + ". "
-                    + entry["question"]["stem"]
-                    + "?",
+                    "text_question": entry["question"]["stem"] + "?",
                     "text_choices": sentence_choices,
+                    "fact": entry["fact1"],
                     "choices": choices,
                     "id": entry["id"],
                 }
@@ -456,7 +456,7 @@ class OpenBookQADataset:
     @staticmethod
     def generate_choice_str(choices: List[str]):
         result = ""
-        options = ["(A)", "(B)", "(C)", "(D)", "(E)"]
+        options = ["(A)", "(B)", "(C)", "(D)"]
         for option, choice in zip(options, choices):
             result += option + " " + choice + " "
         return result

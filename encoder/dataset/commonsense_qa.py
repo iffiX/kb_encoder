@@ -214,11 +214,6 @@ class CommonsenseQADataset:
             sentence = self.tokenizer.decode(
                 batch["sentence"][i], skip_special_tokens=True
             )
-            # print(
-            #     f"sentence: [{sentence}] \n"
-            #     f"answer: [{answer}] \n"
-            #     f"ref_answer: [{ref_answer}]"
-            # )
             answers[batch["id"][i]] = False
             if answer == ref_answer:
                 correct += 1
@@ -226,7 +221,7 @@ class CommonsenseQADataset:
             elif answer not in batch["choices"][i]:
                 print(
                     f"sentence: [{sentence}] \n"
-                    f"answer: [{answer}] \n"
+                    f"wrong answer: [{answer}] \n"
                     f"ref_answer: [{ref_answer}]"
                 )
                 if self.match_closest_when_no_equal:
@@ -247,7 +242,7 @@ class CommonsenseQADataset:
             else:
                 print(
                     f"sentence: [{sentence}] \n"
-                    f"answer: [{answer}] \n"
+                    f"wrong answer: [{answer}] \n"
                     f"ref_answer: [{ref_answer}]"
                 )
 

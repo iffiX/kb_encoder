@@ -19,6 +19,7 @@
 
 // A number large enough to represent unreachability, but not enough to overflow int
 #define DISTANCE_MAX 1000000
+#define SPLIT_NODE_MINIMUM_EDGE_NUM 20
 
 using namespace std;
 
@@ -241,6 +242,11 @@ void KnowledgeBase::clearDisabledEdges() {
     isEdgeDisabled.resize(edges.size(), false);
 }
 
+void KnowledgeBase::disableAllEdges() {
+    isEdgeDisabled.clear();
+    isEdgeDisabled.resize(edges.size(), true);
+}
+
 void KnowledgeBase::disableEdgesOfRelationships(const vector<string> &rel) {
     unordered_set<string> disabledSet(rel.begin(), rel.end());
     unordered_set<long> disabledIds;
@@ -376,26 +382,37 @@ void KnowledgeBase::addCompositeNode(const string &compositeNode,
         if (not valid)
             continue;
 
-        size_t edgeIndex = edges.size();
         long sourceNodeId = nodeMap.at(subNode.second.back());
-
-        if (connectedSource.find(sourceNodeId) != connectedSource.end())
-            continue;
-        components.push_back(sourceNodeId);
-        connectedSource.insert(sourceNodeId);
-        edges.emplace_back(Edge{sourceNodeId, relationId, newNodeId, 1, ""});
-        edgeToTarget[newNodeId].push_back(edgeIndex);
-        edgeFromSource[sourceNodeId].push_back(edgeIndex);
-        isEdgeDisabled.push_back(false);
-        adjacency[newNodeId].insert(sourceNodeId);
-        adjacency[sourceNodeId].insert(newNodeId);
-        tokenizedEdgeAnnotations.emplace_back(vector<int>{});
+        bool hasOut = edgeFromSource.find(sourceNodeId) != edgeFromSource.end();
+        bool hasIn = edgeToTarget.find(sourceNodeId) != edgeToTarget.end();
+        size_t outSize = hasOut ? edgeFromSource.at(sourceNodeId).size() : 0;
+        size_t inSize = hasIn ? edgeToTarget.at(sourceNodeId).size() : 0;
+        if (outSize + inSize < SPLIT_NODE_MINIMUM_EDGE_NUM) {
 #ifdef DEBUG
-        cout << fmt::format("Connecting node [{}:{}] to composite node [{}:{}] with relation [{}:{}]",
-                            nodes[sourceNodeId], sourceNodeId,
-                            nodes[newNodeId], newNodeId,
-                            relationships[relationId], relationId) << endl;
+            cout << fmt::format("Splitting node [{}:{}]", nodes[sourceNodeId], sourceNodeId) << endl;
 #endif
+            unordered_map<size_t, vector<vector<int>>> subSubMatches = nodeTrie.matchForAll(
+                subNode.second.back(), true);
+            for(auto& subSubMatch : subSubMatches) {
+                // When splitting node ABC
+                // Might insert A, AB, ABC, B, BC, C
+                for(auto& baseMatch : subSubMatch.second) {
+                    long baseNodeId = nodeMap.at(baseMatch);
+                    if (connectedSource.find(baseNodeId) != connectedSource.end())
+                        continue;
+                    connectedSource.insert(baseNodeId);
+                    components.push_back(baseNodeId);
+                    connectCompositeNodeToSubNode(baseNodeId, relationId, newNodeId);
+                }
+            }
+        }
+        else {
+            if (connectedSource.find(sourceNodeId) != connectedSource.end())
+                continue;
+            connectedSource.insert(sourceNodeId);
+            components.push_back(sourceNodeId);
+            connectCompositeNodeToSubNode(sourceNodeId, relationId, newNodeId);
+        }
     }
     compositeNodes.emplace(newNodeId, components);
 }
@@ -562,23 +579,31 @@ int KnowledgeBase::distance(long node1, long node2, bool fast) const {
 }
 
 float KnowledgeBase::cosineSimilarity(long node1, long node2) const {
-    if (isNodeComposite[node1]) {
-        // Minimum of cosine similarity is -1
-        float max = -1;
-        for (long subNode : compositeNodes.at(node1)) {
-            float sim = cosineSimilarity(subNode, node2);
-            max = sim > max ? sim : max;
-        }
-        return max;
-    }
-    if (isNodeComposite[node2]) {
-        float max = -1;
-        for (long subNode : compositeNodes.at(node2)) {
-            float sim = cosineSimilarity(node1, subNode);
-            max = sim > max ? sim : max;
-        }
-        return max;
-    }
+//    if (isNodeComposite[node1] and isNodeComposite[node2]) {
+//        float sim = 0;
+//        for (long subNode : compositeNodes.at(node1)) {
+//            sim += cosineSimilarity(subNode, node2);
+//        }
+//        return sim;
+//    }
+//    if (isNodeComposite[node1]) {
+//        float max = -1;
+//        for (long subNode : compositeNodes.at(node1)) {
+//            float sim = cosineSimilarity(subNode, node2);
+//            max = sim > max ? sim : max;
+//        }
+//        return max;
+//    }
+//    if (isNodeComposite[node2]) {
+//        float max = -1;
+//        for (long subNode : compositeNodes.at(node2)) {
+//            float sim = cosineSimilarity(node1, subNode);
+//            max = sim > max ? sim : max;
+//        }
+//        return max;
+//    }
+    if (isNodeComposite[node1] or isNodeComposite[node2])
+        throw std::invalid_argument("Composite nodes are not supported");
     if (nodeEmbeddingMem.get() != nullptr)
         return cosineSimilarityFromMem(nodeEmbeddingMem, node1, node2, nodeEmbeddingDim, nodeEmbeddingSimplifyWithInt8);
     else
@@ -744,6 +769,23 @@ void KnowledgeBase::loadAdjacency() {
             adjacency[tarNodeAdj.first].insert(get<0>(edges[edgeIndex]));
         }
     }
+}
+
+void KnowledgeBase::connectCompositeNodeToSubNode(long sourceNodeId, long relationId, long newNodeId) {
+    size_t edgeIndex = edges.size();
+    edges.emplace_back(Edge{sourceNodeId, relationId, newNodeId, 1, ""});
+    edgeToTarget[newNodeId].push_back(edgeIndex);
+    edgeFromSource[sourceNodeId].push_back(edgeIndex);
+    isEdgeDisabled.push_back(false);
+    adjacency[newNodeId].insert(sourceNodeId);
+    adjacency[sourceNodeId].insert(newNodeId);
+    tokenizedEdgeAnnotations.emplace_back(vector < int > {});
+#ifdef DEBUG
+    cout << fmt::format("Connecting node [{}:{}] to composite node [{}:{}] with relation [{}:{}]",
+                        nodes[sourceNodeId], sourceNodeId,
+                        nodes[newNodeId], newNodeId,
+                        relationships[relationId], relationId) << endl;
+#endif
 }
 
 inline bool KnowledgeBase::isNeighbor(long node1, long node2) const {
@@ -1013,7 +1055,7 @@ KnowledgeMatcher::matchByNode(const vector<int> &sourceSentence,
     // node id
     vector<long> nodes;
 
-    unordered_map<pair<long, long>, float, UndirectedPairHash> similarityCache;
+    unordered_map<pair<long, long>, float, PairHash> similarityCache;
 
     for (auto &sm : sourceMatch) {
         if (posRef.find(kb.nodeMap.at(sm.second)) == posRef.end() || posRef[kb.nodeMap.at(sm.second)].first > sm.first)
@@ -1242,7 +1284,7 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
     // node id
     vector<long> nodes;
 
-    unordered_map<pair<long, long>, float, UndirectedPairHash> similarityCache;
+    unordered_map<pair<long, long>, float, PairHash> similarityCache;
 
     for (auto &sm : sourceMatch) {
         if (posRef.find(kb.nodeMap.at(sm.second)) == posRef.end() || posRef[kb.nodeMap.at(sm.second)].first > sm.first)
@@ -1327,13 +1369,39 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
 #endif
                 }
                 else {
-                    // Minimum of cosine similarity is -1
-                    float simTmp = -1, simToEachTarget = -1;
+//                    float simTmp = 0, simToEachTarget = -1;
+//                    long simTmpTarget = -1;
+//                    bool isNodeComposite = kb.isNodeComposite[otherNodeId];
+//                    if (not isNodeComposite) {
+//                        // If node is not a composite node, find the closest target node
+//                        // Minimum of cosine similarity is -1
+//                        simTmp = -1;
+//                    }
+//                    // Othewise, sum best similarity scores of component nodes of the composite node
+//                    // to all target nodes, and simTmp start at 0
+//                    for (auto &tNode : targetNodes) {
+//                        auto simPair = make_pair(tNode.first, otherNodeId);
+//                        if (similarityCache.find(simPair) == similarityCache.end()) {
+//                            simToEachTarget = kb.cosineSimilarity(otherNodeId, tNode.first);
+//                            similarityCache[simPair] = simToEachTarget;
+//                        } else {
+//                            simToEachTarget = similarityCache.at(simPair);
+//                        }
+//                        if (not isNodeComposite && simToEachTarget > simTmp) {
+//                            simTmpTarget = tNode.first;
+//                            simTmp = simToEachTarget;
+//                        }
+//                        else if (isNodeComposite)
+//                            simTmp += simToEachTarget;
+//                    }
+                    float simTmp = 0, simToEachTarget = -1;
                     long simTmpTarget = -1;
-                    for (auto &tNode : targetNodes) {
-                        // If root node is a target node to be compared, skip this node
-                        // to prevent selecting edges with no useful information
-                        if (rootNode != tNode.first) {
+                    bool isNodeComposite = kb.isNodeComposite[otherNodeId];
+                    if (not isNodeComposite) {
+                        // If node is not a composite node, find the closest target node
+                        // Minimum of cosine similarity is -1
+                        simTmp = -1;
+                        for (auto &tNode : targetNodes) {
                             auto simPair = make_pair(tNode.first, otherNodeId);
                             if (similarityCache.find(simPair) == similarityCache.end()) {
                                 simToEachTarget = kb.cosineSimilarity(otherNodeId, tNode.first);
@@ -1341,14 +1409,31 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
                             } else {
                                 simToEachTarget = similarityCache.at(simPair);
                             }
+                            if (simToEachTarget > simTmp) {
+                                simTmpTarget = tNode.first;
+                                simTmp = simToEachTarget;
+                            }
                         }
-                        else
-                            simToEachTarget = -1;
-                        if (simToEachTarget > simTmp) {
-                            simTmpTarget = tNode.first;
-                            simTmp = simToEachTarget;
+                    } else {
+                        // Othewise, sum best similarity scores of component nodes of the composite node
+                        // to all target nodes, and simTmp start at 0
+                        auto &components = kb.compositeNodes.at(otherNodeId);
+                        for (auto &tNode : targetNodes) {
+                            float subNodeSim = -1;
+                            for (long subNodeId : components) {
+                                auto simPair = make_pair(tNode.first, subNodeId);
+                                if (similarityCache.find(simPair) == similarityCache.end()) {
+                                    simToEachTarget = kb.cosineSimilarity(subNodeId, tNode.first);
+                                    similarityCache[simPair] = simToEachTarget;
+                                } else {
+                                    simToEachTarget = similarityCache.at(simPair);
+                                }
+                                subNodeSim = simToEachTarget > subNodeSim ? simToEachTarget : subNodeSim;
+                            }
+                            simTmp += subNodeSim;
                         }
                     }
+
                     // Set to 0 since discrete_distribution requires non-negative weight
                     if (simTmp < discardEdgesIfSimilarityBelow)
                         simTmp = 0;
@@ -1650,11 +1735,6 @@ size_t KnowledgeMatcher::PairHash::operator()(const pair<T1, T2> &pair) const {
     return (hash<T1>()(pair.first) << 32) | hash<T2>()(pair.second);
 }
 
-template<typename T1, typename T2>
-size_t KnowledgeMatcher::UndirectedPairHash::operator()(const pair<T1, T2> &pair) const {
-    return hash<T1>()(pair.first) ^ hash<T2>()(pair.second);
-}
-
 
 vector<int> KnowledgeMatcher::edgeToAnnotation(size_t edgeIndex) const {
     const Edge &edge = kb.edges[edgeIndex];
@@ -1738,11 +1818,11 @@ void KnowledgeMatcher::matchForSourceAndTarget(const vector<int> &sourceSentence
                                               matches.second.back().end(), ","), matches.first) << endl;
 #endif
             } else
-                sourceMatch.emplace(matches.first, matches.second.back()); // Insert longest
+                normalizeMatch(sourceMatch, sourceMask, matches.first, matches.second.back()); // Insert longest
         }
     } else {
         for (auto &matches : sourceMatches)
-            sourceMatch.emplace(matches.first, matches.second.back()); // Insert longest
+            normalizeMatch(sourceMatch, sourceMask, matches.first, matches.second.back()); // Insert longest
     }
     if (targetSentence.empty())
         targetMatch = sourceMatch;
@@ -1764,17 +1844,56 @@ void KnowledgeMatcher::matchForSourceAndTarget(const vector<int> &sourceSentence
                                                   matches.second.back().end(), ","), matches.first) << endl;
 #endif
                 } else
-                    targetMatch.emplace(matches.first, matches.second.back()); // Insert longest
+                    normalizeMatch(targetMatch, targetMask, matches.first, matches.second.back()); // Insert longest
             }
         } else {
             for (auto &matches : targetMatches)
-                targetMatch.emplace(matches.first, matches.second.back()); // Insert longest
+                normalizeMatch(targetMatch, targetMask, matches.first, matches.second.back()); // Insert longest
         }
     }
 #ifdef DEBUG
     cout << "Finish node matching for source and target sentence" << endl;
 #endif
 
+}
+
+void KnowledgeMatcher::normalizeMatch(unordered_map<size_t, vector<int>> &match,
+                                      const vector<int> &mask,
+                                      size_t position,
+                                      const vector<int> &node) const {
+    long nodeId = kb.nodeMap.at(node);
+    bool hasOut = kb.edgeFromSource.find(nodeId) != kb.edgeFromSource.end();
+    bool hasIn = kb.edgeToTarget.find(nodeId) != kb.edgeToTarget.end();
+    size_t outSize = hasOut ? kb.edgeFromSource.at(nodeId).size() : 0;
+    size_t inSize = hasIn ? kb.edgeToTarget.at(nodeId).size() : 0;
+    if (outSize + inSize < SPLIT_NODE_MINIMUM_EDGE_NUM) {
+#ifdef DEBUG
+        cout << fmt::format("Splitting node [{}:{}]", kb.nodes[nodeId], nodeId) << endl;
+#endif
+        unordered_map<size_t, vector<vector<int>>> subMatches = kb.nodeTrie.matchForAll(node, true);
+        for(auto &subMatch : subMatches) {
+            // When splitting node ABC
+            // Might insert A, AB, ABC, B, BC, C
+            for(auto &subSubMatch : subMatch.second) {
+                bool allMasked = true;
+                for(size_t i = 0; i < subSubMatch.size(); i++) {
+                    if (mask[subMatch.first + position + i] == 1) {
+                        allMasked = false;
+                    }
+                }
+                if (not allMasked) {
+                    match.emplace(subMatch.first + position, subSubMatch);
+#ifdef DEBUG
+                    long subNodeId = kb.nodeMap.at(subSubMatch);
+                    cout << fmt::format("Splitted node [{}:{}]", kb.nodes[subNodeId], subNodeId) << endl;
+#endif
+                }
+            }
+        }
+    }
+    else {
+        match.emplace(position, node);
+    }
 }
 
 MatchResult
@@ -1795,7 +1914,11 @@ KnowledgeMatcher::selectPaths(VisitedSubGraph &visitedSubGraph,
         firstprivate(remainingEdges)
     for (auto &path : visitedSubGraph.visitedPaths) {
         path.uncoveredEdges.insert(path.uncoveredEdges.end(), path.edges.begin(), path.edges.end());
-        updatePath(path, visitedSubGraph.coveredNodePairs, visitedSubGraph.sourceToTargetSimilarity, remainingEdges);
+        updatePath(path,
+                   visitedSubGraph.coveredCompositeNodes,
+                   visitedSubGraph.coveredNodePairs,
+                   visitedSubGraph.sourceToTargetSimilarity,
+                   remainingEdges);
         pathRank.emplace_back(make_pair(path.bestSimilarity, path.uncoveredEdges.size()));
     }
 
@@ -1817,7 +1940,22 @@ KnowledgeMatcher::selectPaths(VisitedSubGraph &visitedSubGraph,
         for (size_t addEdgeIndex : addEdges) {
             long srcId = get<0>(kb.edges[addEdgeIndex]);
             long tarId = get<2>(kb.edges[addEdgeIndex]);
-            visitedSubGraph.coveredNodePairs.insert(make_pair(srcId, tarId));
+            bool isSrcComposite = kb.isNodeComposite[srcId];
+            bool isTarComposite = kb.isNodeComposite[tarId];
+
+            if (not isSrcComposite && not isTarComposite) {
+                // Prevent inserting multiple edges connecting the same two nodes
+                // If both of these two nodes are not composite
+                visitedSubGraph.coveredNodePairs.insert(make_pair(srcId, tarId));
+            }
+            else {
+                // Prevent inserting same composite nodes
+                // (since composite nodes usually requires more space)
+                if (isSrcComposite)
+                    visitedSubGraph.coveredCompositeNodes.insert(srcId);
+                if (isTarComposite)
+                    visitedSubGraph.coveredCompositeNodes.insert(tarId);
+            }
         }
         visitedSubGraph.sourceToTargetSimilarity[make_pair(path.root, path.bestSimilarityTarget)] = path.bestSimilarity;
         remainingEdges -= int(addEdges.size());
@@ -1860,6 +1998,7 @@ KnowledgeMatcher::selectPaths(VisitedSubGraph &visitedSubGraph,
         for (size_t i = 0; i < visitedSubGraph.visitedPaths.size(); i++) {
             auto &vPath = visitedSubGraph.visitedPaths[i];
             updatePath(vPath,
+                       visitedSubGraph.coveredCompositeNodes,
                        visitedSubGraph.coveredNodePairs,
                        visitedSubGraph.sourceToTargetSimilarity,
                        remainingEdges);
@@ -1887,7 +2026,7 @@ void KnowledgeMatcher::trimPath(VisitedPath &path) const {
     size_t trimPosition = 0;
     for (size_t i = 0; i < path.edges.size(); i++) {
         float similarity = path.similarities.at(path.edges[i]);
-        if (similarity >= path.bestSimilarity) {
+        if (similarity >= path.bestSimilarity and similarity > 0) {
             path.bestSimilarity = similarity;
             path.bestSimilarityTarget = path.similarityTargets.at(path.edges[i]);
             trimPosition = i + 1;
@@ -1901,6 +2040,7 @@ void KnowledgeMatcher::trimPath(VisitedPath &path) const {
 }
 
 void KnowledgeMatcher::updatePath(VisitedPath &path,
+                                  const unordered_set<long> &coveredCompositeNodes,
                                   const unordered_set<pair<long, long>, PairHash> &coveredNodePairs,
                                   const unordered_map<pair<long, long>, float, PairHash> &sourceToTargetSimilarity,
                                   int remainingEdges) const {
@@ -1917,15 +2057,30 @@ void KnowledgeMatcher::updatePath(VisitedPath &path,
             break;
         long srcId = get<0>(kb.edges[uEdge]);
         long tarId = get<2>(kb.edges[uEdge]);
-        if ((coveredNodePairs.find(make_pair(srcId, tarId)) == coveredNodePairs.end()) &&
-            (coveredNodePairs.find(make_pair(tarId, srcId)) == coveredNodePairs.end())) {
+        // Only add edges to uncovered list, if:
+        // 1. Both of its ends are not composite nodes and both ends are not covered by some edge
+        // 2. Any of its end is a composite node, and if it is, the composite node must be not covered
+        if ((not kb.isNodeComposite[srcId] &&
+             not kb.isNodeComposite[tarId] &&
+             coveredNodePairs.find(make_pair(srcId, tarId)) == coveredNodePairs.end() &&
+             coveredNodePairs.find(make_pair(tarId, srcId)) == coveredNodePairs.end()) ||
+             ((not kb.isNodeComposite[srcId] || coveredCompositeNodes.find(srcId) == coveredCompositeNodes.end()) &&
+              (not kb.isNodeComposite[tarId] || coveredCompositeNodes.find(tarId) == coveredCompositeNodes.end()))) {
             uncoveredEdges.emplace_back(uEdge);
             if (path.similarities.at(uEdge) * focusMultiplier > bestSimilarity) {
                 auto pair = make_pair(path.root, path.similarityTargets.at(uEdge));
+                // Consider a path from some root node R to some target node T
+                // If its similarity is larger than another path from same root
+                // R to target node Tin the covered set
+                // Then make this path the best path from R -> T
+
+                // In the mean time, since a path can be similar to multiple nodes
+                // (or -1 indicating that do not compare to a single node but a group of nodes)
+                // select the most similar target node T* amoung all target nodes {T}
                 bool isBetterThanCurrent = (
                         sourceToTargetSimilarity.find(pair) == sourceToTargetSimilarity.end() ||
                         sourceToTargetSimilarity.at(pair) < path.similarities.at(uEdge) * focusMultiplier);
-                if (isBetterThanCurrent) {
+                if (isBetterThanCurrent or pair.second == -1) {
                     bestSimilarity = path.similarities.at(uEdge) * focusMultiplier;
                     bestSimilarityTarget = path.similarityTargets.at(uEdge);
                 }

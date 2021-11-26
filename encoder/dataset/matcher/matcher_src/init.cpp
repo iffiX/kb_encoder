@@ -59,6 +59,7 @@ PYBIND11_MODULE(matcher, m) {
             .def_readwrite("tokenized_relationships", &KnowledgeBase::tokenizedRelationships)
             .def_readwrite("tokenized_edge_annotations", &KnowledgeBase::tokenizedEdgeAnnotations)
             .def("clear_disabled_edges", &KnowledgeBase::clearDisabledEdges)
+            .def("disable_all_edges", &KnowledgeBase::disableAllEdges)
             .def("disable_edges_of_nodes", &KnowledgeBase::disableEdgesOfNodes)
             .def("disable_edges_of_relationships", &KnowledgeBase::disableEdgesOfRelationships)
             .def("find_nodes", &KnowledgeBase::findNodes)
