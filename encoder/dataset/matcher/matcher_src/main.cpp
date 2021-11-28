@@ -149,11 +149,9 @@ int main() {
     KnowledgeMatcher matcher("/home/muhan/data/workspace/kb_encoder/data/preprocess/conceptnet-archive.data");
     KnowledgeMatcher matcher2("/home/muhan/data/workspace/kb_encoder/data/preprocess/conceptnet-archive.data");
 
-    matcher.matchByNodeEmbedding(sourceSentence, targetSentence, sourceMask, targetMask,
-                                  300, 3, 12,697474,-1,0.5,0);
+    matcher.matchByNodeEmbedding(sourceSentence, targetSentence, sourceMask, targetMask);
 
-    matcher2.matchByNodeEmbedding(sourceSentence, targetSentence, sourceMask, targetMask,
-                                 300, 3, 12,697474,-1,0.5,0);
+    matcher2.matchByNodeEmbedding(sourceSentence, targetSentence, sourceMask, targetMask);
 
 //    matcher.matchByToken(sourceSentence, targetSentence, sourceMask, targetMask,
 //                                 300, 2, 12,1920301,3,0.5,0, rankFocus, {});

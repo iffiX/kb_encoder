@@ -95,42 +95,33 @@ PYBIND11_MODULE(matcher, m) {
                                         cnr.nodes.size(), cnr.relationships.size(), cnr.edges.size());
                  });
 
+    py::class_<KnowledgeMatcher::MatchResult>(m, "MatchResult")
+            .def(pybind11::init<>());
+
     py::class_<KnowledgeMatcher>(m, "KnowledgeMatcher")
             .def(py::init<const KnowledgeBase &>())
             .def(py::init<const std::string &>())
             .def_readwrite("kb", &KnowledgeMatcher::kb)
-            .def("match_by_node", &KnowledgeMatcher::matchByNode,
-                 py::arg("source_sentence"),
-                 py::arg("target_sentence") = std::vector<int>{},
-                 py::arg("source_mask") = std::vector<int>{},
-                 py::arg("target_mask") = std::vector<int>{},
-                 py::arg("max_times") = 100, py::arg("max_depth") = 3,
-                 py::arg("max_edges") = 10, py::arg("seed") = -1,
-                 py::arg("edge_beam_width") = -1, py::arg("trim_path") = true,
-                 py::arg("discard_edges_if_similarity_below") = 0,
-                 py::arg("discard_edges_if_rank_below") = 0)
             .def("match_by_node_embedding", &KnowledgeMatcher::matchByNodeEmbedding,
                  py::arg("source_sentence"),
                  py::arg("target_sentence") = std::vector<int>{},
                  py::arg("source_mask") = std::vector<int>{},
                  py::arg("target_mask") = std::vector<int>{},
-                 py::arg("max_times") = 100, py::arg("max_depth") = 3,
-                 py::arg("max_edges") = 10, py::arg("seed") = -1,
+                 py::arg("max_times") = 100, py::arg("max_depth") = 3, py::arg("seed") = -1,
                  py::arg("edge_beam_width") = -1, py::arg("trim_path") = true,
-                 py::arg("discard_edges_if_similarity_below") = 0.5,
-                 py::arg("discard_edges_if_rank_below") = 0)
+                 py::arg("stop_searching_edge_if_similarity_below") = 0)
             .def("match_by_token", &KnowledgeMatcher::matchByToken,
                  py::arg("source_sentence"),
                  py::arg("target_sentence") = std::vector<int>{},
                  py::arg("source_mask") = std::vector<int>{},
                  py::arg("target_mask") = std::vector<int>{},
-                 py::arg("max_times") = 100, py::arg("max_depth") = 3,
-                 py::arg("max_edges") = 10, py::arg("seed") = -1,
+                 py::arg("max_times") = 100, py::arg("max_depth") = 3, py::arg("seed") = -1,
                  py::arg("edge_beam_width") = -1, py::arg("trim_path") = true,
-                 py::arg("discard_edges_if_similarity_below") = 0,
-                 py::arg("discard_edges_if_rank_below") = 0,
+                 py::arg("stop_searching_edge_if_similarity_below") = 0,
                  py::arg("rank_focus") = std::vector<std::vector<int>>{},
                  py::arg("rank_exclude") = std::vector<std::vector<int>>{})
+            .def("join_match_results", &KnowledgeMatcher::joinMatchResults)
+            .def("select_paths", &KnowledgeMatcher::selectPaths)
             .def("save", &KnowledgeMatcher::save,
                  py::arg("archive_path"))
             .def("load", &KnowledgeMatcher::load,

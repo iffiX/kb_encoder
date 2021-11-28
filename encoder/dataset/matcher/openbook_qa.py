@@ -100,16 +100,16 @@ class OpenBookQAMatcher(BaseMatcher):
         # matcher.kb.disable_edges_of_relationships(
         #     [
         #         "Antonym",
-        #         "AtLocation",
-        #         "CapableOf",
-        #         "Causes",
+        #         # "AtLocation",
+        #         # "CapableOf",
+        #         # "Causes",
         #         "CausesDesire",
         #         "CreatedBy",
         #         "DefinedAs",
         #         # "DerivedFrom",
         #         "Desires",
         #         "DistinctFrom",
-        #         "Entails",
+        #         # "Entails",
         #         "EtymologicallyDerivedFrom",
         #         "EtymologicallyRelatedTo",
         #         # "FormOf",
@@ -131,11 +131,11 @@ class OpenBookQAMatcher(BaseMatcher):
         #         "NotHasProperty",
         #         "PartOf",
         #         "ReceivesAction",
-        #         "RelatedTo",
+        #         # "RelatedTo",
         #         "SimilarTo",
         #         "SymbolOf",
         #         "Synonym",
-        #         "UsedFor",
+        #         # "UsedFor",
         #         "capital",
         #         "field",
         #         "genre",
@@ -164,27 +164,10 @@ class OpenBookQAMatcher(BaseMatcher):
         #     openbook_qa_path, "Additional", "crowdsourced-facts.txt"
         # )
         # openbook_qa_facts_path = os.path.join(openbook_qa_path, "Main", "openbook.txt")
-        #
-        # count = 0
-        # for path in (crowd_source_facts_path, openbook_qa_facts_path):
-        #     with open(path, "r") as file:
-        #         for line in file:
-        #             line = line.strip('"').strip("\n").strip(".")
-        #             if len(line) < 3:
-        #                 continue
-        #             count += 1
-        #             self.matcher.kb.add_composite_node(
-        #                 line,
-        #                 "RelatedTo",
-        #                 self.tokenizer.encode(line, add_special_tokens=False),
-        #             )
-        #             # Adding mask will cause worse performance
-        #             # ids, mask = self.tokenize_and_mask(line)
-        #             # self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
+
         openbook_qa_path = os.path.join(
             dataset_cache_dir, "openbook_qa", "OpenBookQA-V1-Sep2018", "Data"
         )
-
         openbook_qa_facts_path = os.path.join(openbook_qa_path, "Main", "openbook.txt")
 
         count = 0
@@ -194,10 +177,26 @@ class OpenBookQAMatcher(BaseMatcher):
                     line = line.strip("\n").strip(".").strip('"').strip("'")
                     if len(line) < 3:
                         continue
+                    # line = self.compress_knowledge(line)
                     count += 1
                     ids, mask = self.tokenize_and_mask(line)
                     self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
         logging.info(f"Added {count} composite nodes")
+
+    @staticmethod
+    def compress_knowledge(knowledge):
+        allowed_tokens = []
+        for token, pos in nltk.pos_tag(nltk.word_tokenize(knowledge)):
+            if (
+                pos.startswith("NN")
+                or pos.startswith("JJ")
+                or pos.startswith("RB")
+                or pos.startswith("VB")
+                or pos.startswith("CC")
+                or pos.startswith("CD")
+            ):
+                allowed_tokens.append(token)
+        return " ".join(allowed_tokens)
 
     def __reduce__(self):
         return OpenBookQAMatcher, (self.tokenizer,)

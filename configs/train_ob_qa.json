@@ -5,7 +5,7 @@
             "base_type": "t5-3b",
             "batch_size": 4,
             "epochs": 30,
-            "load_worker_num": 8,
+            "load_worker_num": 16,
             "load_prefetch_per_worker": 8,
             "l2_regularization": 0,
             "learning_rate": 1e-4,
@@ -18,8 +18,8 @@
             "matcher_config": {
                 "max_times": 1000,
                 "max_depth": 2,
-                "max_edges": 6,
-                "discard_edges_if_similarity_below": 0.45,
+                "max_edges": 10,
+                "stop_searching_edge_if_similarity_below": 0.45,
                 "discard_edges_if_rank_below": 0.7
             },
             "seed": 697474,

@@ -15,8 +15,8 @@
 #include <unordered_set>
 #include <iostream>
 
+// source id, relation id, target id, weight, annotated representation.
 using Edge = std::tuple<long, long, long, float, std::string>;
-using MatchResult = std::unordered_map<size_t, std::tuple<size_t, std::vector<std::vector<int>>, std::vector<float>>>;
 
 class TrieNode {
 public:
@@ -111,6 +111,7 @@ public:
     std::unordered_map<std::vector<int>, long, VectorHash> nodeMap;
     std::vector<bool> isNodeComposite;
     std::unordered_map<long, std::vector<long>> compositeNodes;
+    std::unordered_map<long, size_t> compositeComponentCount;
     std::shared_ptr<HighFive::File> nodeEmbeddingFile;
     std::shared_ptr<HighFive::DataSet> nodeEmbeddingDataset;
     std::shared_ptr<void> nodeEmbeddingMem;
@@ -212,49 +213,13 @@ private:
 
 class KnowledgeMatcher {
 public:
-    KnowledgeBase kb;
-public:
-    explicit KnowledgeMatcher(const KnowledgeBase &knowledgeBase);
-
-    explicit KnowledgeMatcher(const std::string &archivePath);
-
-    MatchResult
-    matchByNode(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
-                const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
-                int maxTimes = 100, int maxDepth = 3, int maxEdges = 10, int seed = -1,
-                int edgeBeamWidth = -1, bool trimPath = true,
-                float discardEdgesIfSimilarityBelow = 0,
-                float discardEdgesIfRankBelow = 0) const;
-
-    MatchResult
-    matchByNodeEmbedding(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
-                         const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
-                         int maxTimes = 100, int maxDepth = 3, int maxEdges = 10, int seed = -1,
-                         int edgeBeamWidth = -1, bool trimPath = true,
-                         float discardEdgesIfSimilarityBelow = 0.5,
-                         float discardEdgesIfRankBelow = 0) const;
-
-    MatchResult
-    matchByToken(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
-                 const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
-                 int maxTimes = 100, int maxDepth = 3, int maxEdges = 10, int seed = -1,
-                 int edgeBeamWidth = -1, bool trimPath = true,
-                 float discardEdgesIfSimilarityBelow = 0,
-                 float discardEdgesIfRankBelow = 0,
-                 const std::vector<std::vector<int>> &rankFocus = {},
-                 const std::vector<std::vector<int>> &rankExclude = {}) const;
-
-    void save(const std::string &archivePath) const;
-
-    void load(const std::string &archivePath, bool loadEmbeddingToMem = true);
-
-private:
     struct PairHash {
         template<class T1, class T2>
         std::size_t operator()(const std::pair<T1, T2> &pair) const;
     };
 
     struct VisitedPath {
+        int round;
         long root;
         int matchedFocusCount;
         std::vector<size_t> edges;
@@ -275,6 +240,49 @@ private:
         std::unordered_map<long, std::vector<size_t>> coveredSubGraph;
     };
 
+    struct MatchResult {
+        VisitedSubGraph visitedSubGraph;
+
+        // first: matched node id, match start position in sentence, match end position in sentence
+        // also only store the first posision reference if there are multiple occurrences to prevent
+        // duplicate knowledge.
+        std::unordered_map<long, std::pair<size_t, size_t>> nodeToTokenPosition;
+
+    };
+    typedef std::unordered_map<size_t, std::tuple<size_t, std::vector<std::vector<int>>, std::vector<float>>> SelectResult;
+public:
+    KnowledgeBase kb;
+public:
+    explicit KnowledgeMatcher(const KnowledgeBase &knowledgeBase);
+
+    explicit KnowledgeMatcher(const std::string &archivePath);
+
+    MatchResult
+    matchByNodeEmbedding(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
+                         const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
+                         int maxTimes = 100, int maxDepth = 3, int seed = -1,
+                         int edgeBeamWidth = -1, bool trimPath = true,
+                         float stopSearchingEdgeIfSimilarityBelow = 0) const;
+
+    MatchResult
+    matchByToken(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
+                 const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
+                 int maxTimes = 100, int maxDepth = 3, int seed = -1,
+                 int edgeBeamWidth = -1, bool trimPath = true,
+                 float stopSearchingEdgeIfSimilarityBelow = 0,
+                 const std::vector<std::vector<int>> &rankFocus = {},
+                 const std::vector<std::vector<int>> &rankExclude = {}) const;
+
+    MatchResult joinMatchResults(const std::vector<MatchResult> &matchResults) const;
+
+    SelectResult selectPaths(const MatchResult &matchResult,
+                             int maxEdges,
+                             float discardEdgesIfRankBelow) const;
+
+    void save(const std::string &archivePath) const;
+
+    void load(const std::string &archivePath, bool loadEmbeddingToMem = true);
+
 private:
     std::vector<int> edgeToAnnotation(size_t edgeIndex) const;
 
@@ -291,11 +299,6 @@ private:
                         const std::vector<int> &mask,
                         size_t position,
                         const std::vector<int> &node) const;
-
-    MatchResult selectPaths(VisitedSubGraph &visitedSubGraph,
-                            const std::unordered_map<long, std::pair<size_t, size_t>> &posRef,
-                            int maxEdges,
-                            float discardEdgesIfRankBelow) const;
 
     void trimPath(VisitedPath &path) const;
 

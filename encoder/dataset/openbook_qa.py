@@ -162,14 +162,29 @@ class OpenBookQADataset:
                     "max_edges": 8,
                     "discard_edges_if_similarity_below": 0.45,
                 }
-                match = self.matcher.match_by_node_embedding(
-                    data["text_question"],
-                    target_sentence=data["text_question"],
-                    seed=self.matcher_seed,
-                    **matcher_config,
-                )
-                new_question = self.matcher.insert_match(
-                    data["text_question"], match, insert_at_end=True
+                match_config = {
+                    k: v
+                    for k, v in matcher_config.items()
+                    if k not in ("max_edges", "discard_edges_if_rank_below")
+                }
+                select_config = {
+                    k: v
+                    for k, v in matcher_config.items()
+                    if k in ("max_edges", "discard_edges_if_rank_below")
+                }
+                matches = [
+                    self.matcher.match_by_node_embedding(
+                        data["text_question"] + " " + choice,
+                        target_sentence=data["text_question"] + " " + choice,
+                        seed=self.matcher_seed,
+                        **match_config,
+                    )
+                    for choice in data["choices"]
+                ]
+                match = self.matcher.unify_match(matches)
+                selection = self.matcher.select_paths(match, **select_config)
+                new_question = self.matcher.insert_selection(
+                    data["text_question"], selection, insert_at_end=True,
                 )
             elif self.matcher_mode == "token":
                 matcher_config = self.matcher_config or {
@@ -177,14 +192,25 @@ class OpenBookQADataset:
                     "max_depth": 1,
                     "max_edges": 8,
                 }
+                match_config = {
+                    k: v
+                    for k, v in matcher_config.items()
+                    if k not in ("max_edges", "discard_edges_if_rank_below")
+                }
+                select_config = {
+                    k: v
+                    for k, v in matcher_config.items()
+                    if k in ("max_edges", "discard_edges_if_rank_below")
+                }
                 match = self.matcher.match_by_node_embedding(
                     data["text_question"],
                     target_sentence=data["text_question"] + " " + data["text_choices"],
                     seed=self.matcher_seed,
-                    **matcher_config,
+                    **match_config,
                 )
-                new_question = self.matcher.insert_match(
-                    data["text_question"], match, insert_at_end=True
+                selection = self.matcher.select_paths(match, **select_config)
+                new_question = self.matcher.insert_selection(
+                    data["text_question"], selection, insert_at_end=True,
                 )
             elif self.matcher_mode == "none":
                 new_question = data["text_question"]

@@ -38,64 +38,6 @@ class BaseMatcher:
         self.tokenizer = tokenizer
         self.matcher = matcher
 
-    def match_by_node(
-        self,
-        source_sentence: str,
-        target_sentence: str = "",
-        source_mask: str = "",
-        target_mask: str = "",
-        max_times: int = 1000,
-        max_depth: int = 3,
-        max_edges: int = 3,
-        seed: int = -1,
-        edge_beam_width: int = -1,
-        trim_path: bool = True,
-        discard_edges_if_similarity_below: float = 0,
-        discard_edges_if_rank_below: float = 0,
-    ) -> Dict[int, Tuple[int, List[List[int]], List[float]]]:
-        """
-        Returns:
-            Dict[end position, Tuple[start position, vector of knowledge sequences, vector of weights]]
-            end position is the index of the word behind the match
-            start position is the index of the first word in the match
-        """
-        if not self.matcher.kb.is_landmark_inited():
-            landmark_path = str(
-                os.path.join(preprocess_cache_dir, "conceptnet-landmark.cache")
-            )
-            self.matcher.kb.init_landmarks(
-                seed_num=100,
-                landmark_num=100,
-                seed=41379823,
-                landmark_path=landmark_path,
-            )
-
-        source_tokens, _source_mask = self.tokenize_and_mask(
-            source_sentence, source_mask
-        )
-        if len(target_sentence) == 0:
-            target_tokens, _target_mask = source_tokens, _source_mask
-        else:
-            target_tokens, _target_mask = self.tokenize_and_mask(
-                target_sentence, target_mask
-            )
-
-        result = self.matcher.match_by_node(
-            source_sentence=source_tokens,
-            target_sentence=target_tokens,
-            source_mask=_source_mask,
-            target_mask=_target_mask,
-            max_times=max_times,
-            max_depth=max_depth,
-            max_edges=max_edges,
-            seed=seed,
-            edge_beam_width=edge_beam_width,
-            trim_path=trim_path,
-            discard_edges_if_similarity_below=discard_edges_if_similarity_below,
-            discard_edges_if_rank_below=discard_edges_if_rank_below,
-        )
-        return result
-
     def match_by_node_embedding(
         self,
         source_sentence: str,
@@ -104,18 +46,14 @@ class BaseMatcher:
         target_mask: str = "",
         max_times: int = 1000,
         max_depth: int = 3,
-        max_edges: int = 3,
         seed: int = -1,
         edge_beam_width: int = -1,
         trim_path: bool = True,
-        discard_edges_if_similarity_below: float = 0.5,
-        discard_edges_if_rank_below: float = 0,
-    ) -> Dict[int, Tuple[int, List[List[int]], List[float]]]:
+        stop_searching_edge_if_similarity_below: float = 0,
+    ):
         """
         Returns:
-            Dict[end position, Tuple[start position, vector of knowledge sequences, vector of weights]]
-            end position is the index of the word behind the match
-            start position is the index of the first word in the match
+            A match result object that can be unified or be used to select paths
         """
         source_tokens, _source_mask = self.tokenize_and_mask(
             source_sentence, source_mask
@@ -134,12 +72,10 @@ class BaseMatcher:
             target_mask=_target_mask,
             max_times=max_times,
             max_depth=max_depth,
-            max_edges=max_edges,
             seed=seed,
             edge_beam_width=edge_beam_width,
             trim_path=trim_path,
-            discard_edges_if_similarity_below=discard_edges_if_similarity_below,
-            discard_edges_if_rank_below=discard_edges_if_rank_below,
+            stop_searching_edge_if_similarity_below=stop_searching_edge_if_similarity_below,
         )
         return result
 
@@ -151,20 +87,16 @@ class BaseMatcher:
         target_mask: str = "",
         max_times: int = 1000,
         max_depth: int = 3,
-        max_edges: int = 3,
         seed: int = -1,
         edge_beam_width: int = -1,
         trim_path: bool = True,
-        discard_edges_if_similarity_below: float = 0,
-        discard_edges_if_rank_below: float = 0,
+        stop_searching_edge_if_similarity_below: float = 0,
         rank_focus: List[str] = None,
         rank_exclude: List[str] = None,
-    ) -> Dict[int, Tuple[int, List[List[int]], List[float]]]:
+    ):
         """
         Returns:
-            Dict[end position, Tuple[start position, vector of knowledge sequences, vector of weights]]
-            end position is the index of the word behind the match
-            start position is the index of the first word in the match
+            A match result object that can be unified or be used to select paths
         """
         source_tokens, _source_mask = self.tokenize_and_mask(
             source_sentence, source_mask
@@ -183,12 +115,10 @@ class BaseMatcher:
             target_mask=_target_mask,
             max_times=max_times,
             max_depth=max_depth,
-            max_edges=max_edges,
             seed=seed,
             edge_beam_width=edge_beam_width,
             trim_path=trim_path,
-            discard_edges_if_similarity_below=discard_edges_if_similarity_below,
-            discard_edges_if_rank_below=discard_edges_if_rank_below,
+            stop_searching_edge_if_similarity_below=stop_searching_edge_if_similarity_below,
             rank_focus=self.tokenizer(rank_focus, add_special_tokens=False).input_ids
             if rank_focus
             else [],
@@ -200,8 +130,21 @@ class BaseMatcher:
         )
         return result
 
-    def match_to_string(
-        self, sentence: str, match: Dict[int, Tuple[int, List[List[int]], List[float]]]
+    def unify_match(self, matches: list):
+        """
+        Unify several match result into one.
+        """
+        return self.matcher.join_match_results(matches)
+
+    def select_paths(
+        self, match, max_edges: int = 10, discard_edges_if_rank_below: float = 0
+    ) -> Dict[int, Tuple[int, List[List[int]], List[float]]]:
+        return self.matcher.select_paths(match, max_edges, discard_edges_if_rank_below)
+
+    def selection_to_string(
+        self,
+        sentence: str,
+        selection: Dict[int, Tuple[int, List[List[int]], List[float]]],
     ) -> Tuple[str, List[Tuple[str, List[str]]]]:
         """
         Returns:
@@ -211,51 +154,29 @@ class BaseMatcher:
                 2. List of knowledge sequences
         """
         sentence_tokens, _ = self.tokenize_and_mask(sentence)
-        sorted_matches = list(
-            (k, v) for k, (_, v, __) in match.items()
+        sorted_selection = list(
+            (k, v) for k, (_, v, __) in selection.items()
         )  # type: List[Tuple[int, List[str]]]
-        sorted_matches = sorted(sorted_matches, key=lambda x: x[0])
+        sorted_selection = sorted(sorted_selection, key=lambda x: x[0])
         start = 0
         result = []
-        for m in sorted_matches:
+        for ss in sorted_selection:
             result.append(
                 (
-                    self.tokenizer.decode(sentence_tokens[start : m[0]]),
-                    [self.tokenizer.decode(seq) for seq in m[1]],
+                    self.tokenizer.decode(sentence_tokens[start : ss[0]]),
+                    [self.tokenizer.decode(seq) for seq in ss[1]],
                 )
             )
-            start = m[0]
+            start = ss[0]
         return self.tokenizer.decode(sentence_tokens[start:]), result
 
-    @staticmethod
-    def unify_match(
-        matches: List[Dict[int, Tuple[int, List[List[int]], List[float]]]]
-    ) -> Dict[int, Tuple[int, List[List[int]], List[float]]]:
-        """
-        Unify several match result into one.
-        """
-        result = {}
-        existed_knowledge = set()
-        for m in matches:
-            for end_pos, (start_pos, knowledge_list, weights) in m.items():
-                if end_pos not in result:
-                    result[end_pos] = (start_pos, [], [])
-                if result[end_pos][0] != start_pos:
-                    raise ValueError("Start position mismatch")
-                for knowledge, weight in zip(knowledge_list, weights):
-                    if tuple(knowledge) not in existed_knowledge:
-                        result[end_pos][1].append(knowledge)
-                        result[end_pos][2].append(weight)
-                        existed_knowledge.add(tuple(knowledge))
-        return result
-
-    def insert_match(
+    def insert_selection(
         self,
         sentence: str,
-        match: Dict[int, Tuple[int, List[List[int]], List[float]]],
-        match_begin: str = "(",
-        match_sep: str = ",",
-        match_end: str = ")",
+        selection: Dict[int, Tuple[int, List[List[int]], List[float]]],
+        begin: str = "(",
+        sep: str = ",",
+        end: str = ")",
         insert_at_end: bool = False,
         include_weights: bool = False,
     ) -> str:
@@ -264,13 +185,13 @@ class BaseMatcher:
         reduced by more than 50%
         """
         sentence_tokens, _ = self.tokenize_and_mask(sentence)
-        if len(match) == 0:
+        if len(selection) == 0:
             return self.tokenizer.decode(sentence_tokens)
-        begin_tokens = self.tokenizer.encode(match_begin, add_special_tokens=False)
-        end_tokens = self.tokenizer.encode(match_end, add_special_tokens=False)
-        sep_tokens = self.tokenizer.encode(match_sep, add_special_tokens=False)
+        begin_tokens = self.tokenizer.encode(begin, add_special_tokens=False)
+        end_tokens = self.tokenizer.encode(end, add_special_tokens=False)
+        sep_tokens = self.tokenizer.encode(sep, add_special_tokens=False)
         new_matches = {}
-        for pos, (_, edges, weights) in match.items():
+        for pos, (_, edges, weights) in selection.items():
             new_edges = []
             for i, (edge, weight) in enumerate(zip(edges, weights)):
                 if not insert_at_end and i == 0:
@@ -286,21 +207,21 @@ class BaseMatcher:
                 else:
                     new_edges += sep_tokens
             new_matches[pos] = new_edges
-        sorted_matches = list(
+        sorted_selection = list(
             (k, v) for k, v in new_matches.items()
         )  # type: List[Tuple[int, List[int]]]
-        sorted_matches = sorted(sorted_matches, key=lambda x: x[0])
+        sorted_selection = sorted(sorted_selection, key=lambda x: x[0])
         if insert_at_end:
             sentence_tokens += begin_tokens
-            for m in sorted_matches:
-                sentence_tokens = sentence_tokens + m[1]
+            for ss in sorted_selection:
+                sentence_tokens = sentence_tokens + ss[1]
             sentence_tokens += end_tokens
         else:
             offset = 0
-            for m in sorted_matches:
-                pos = m[0] + offset
-                sentence_tokens = sentence_tokens[:pos] + m[1] + sentence_tokens[pos:]
-                offset += len(m[1])
+            for ss in sorted_selection:
+                pos = ss[0] + offset
+                sentence_tokens = sentence_tokens[:pos] + ss[1] + sentence_tokens[pos:]
+                offset += len(ss[1])
         return self.tokenizer.decode(sentence_tokens)
 
     def tokenize_and_mask(self, sentence: str, sentence_mask: str = ""):
@@ -344,8 +265,9 @@ class BaseMatcher:
             if (not use_mask or "+" in set(sentence_mask[token_position:offset])) and (
                 pos.startswith("NN")
                 or pos.startswith("JJ")
-                or (pos.startswith("RB") and token.lower().endswith("ly"))
+                or pos.startswith("RB")
                 or (pos.startswith("VB") and token.lower() not in self.VERB_FILTER_SET)
+                or pos.startswith("CD")
             ):
                 allowed_tokens.append(token)
                 # noun, adjective, adverb, verb
@@ -370,7 +292,7 @@ class BaseMatcher:
         result = [[token, ","] for token in tokens]
         for (i, _), (token, pos) in zip(cleaned_tokens_with_index, pos_result):
             _, individual_pos = nltk.pos_tag([token])[0]
-            if individual_pos.startswith("NN"):
+            if individual_pos.startswith("NN") or individual_pos.startswith("VB"):
                 result[i][1] = individual_pos
             else:
                 result[i][1] = pos
