@@ -14,3 +14,4 @@ checksumdir
 scipy
 sklearn
 nltk
+tqdm

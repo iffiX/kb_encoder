@@ -11,7 +11,7 @@ endif()
 # Configuration for depended libraries
 ################################################################
 find_package(HDF5 REQUIRED)
-find_package(Python3 COMPONENTS Development)
+find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 find_package(OpenMP)
 #if (OPENMP_FOUND)
 #   set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
@@ -30,17 +30,17 @@ target_include_directories(matcher PUBLIC
         ${Python3_INCLUDE_DIRS}
         ${PYBIND11_INCLUDE_DIR}
         ${HDF5_INCLUDE_DIRS})
-target_link_libraries(matcher PRIVATE ${HDF5_LIBRARIES})
+target_link_libraries(matcher PRIVATE ${Python3_LIBRARIES} ${HDF5_LIBRARIES})
 if (CMAKE_BUILD_TYPE STREQUAL Debug)
     add_backward(matcher)
 endif()
 install(TARGETS matcher LIBRARY DESTINATION ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_library(matcher_test matcher.cpp concept_net.cpp)
-target_include_directories(matcher_test PUBLIC
-        ${Python3_INCLUDE_DIRS}
-        ${PYBIND11_INCLUDE_DIR}
-        ${HDF5_INCLUDE_DIRS})
-target_link_libraries(matcher_test PUBLIC ${HDF5_LIBRARIES})
-add_executable(test main.cpp)
-target_link_libraries(test matcher_test)
+#add_library(matcher_test matcher.cpp concept_net.cpp)
+#target_include_directories(matcher_test PUBLIC
+#        ${Python3_INCLUDE_DIRS}
+#        ${PYBIND11_INCLUDE_DIR}
+#        ${HDF5_INCLUDE_DIRS})
+#target_link_libraries(matcher_test PUBLIC ${Python3_LIBRARIES} ${HDF5_LIBRARIES})
+#add_executable(test main.cpp)
+#target_link_libraries(test matcher_test)

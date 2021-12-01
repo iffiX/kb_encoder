@@ -2,7 +2,6 @@ import re
 import os
 import nltk
 import logging
-from nltk.corpus import wordnet
 from transformers import PreTrainedTokenizerBase
 from encoder.dataset.matcher import ConceptNetReader, KnowledgeMatcher
 from encoder.dataset.matcher.base import BaseMatcher
@@ -87,68 +86,6 @@ class OpenBookQAMatcher(BaseMatcher):
             matcher.save(archive_path)
         else:
             matcher = KnowledgeMatcher(archive_path)
-
-        # Disable relations of similar word forms
-        # matcher.kb.disable_edges_of_relationships(
-        #     [
-        #         "DerivedFrom",
-        #         "EtymologicallyDerivedFrom",
-        #         "EtymologicallyRelatedTo",
-        #         "FormOf",
-        #     ]
-        # )
-        # matcher.kb.disable_edges_of_relationships(
-        #     [
-        #         "Antonym",
-        #         # "AtLocation",
-        #         # "CapableOf",
-        #         # "Causes",
-        #         "CausesDesire",
-        #         "CreatedBy",
-        #         "DefinedAs",
-        #         # "DerivedFrom",
-        #         "Desires",
-        #         "DistinctFrom",
-        #         # "Entails",
-        #         "EtymologicallyDerivedFrom",
-        #         "EtymologicallyRelatedTo",
-        #         # "FormOf",
-        #         "HasA",
-        #         "HasContext",
-        #         "HasFirstSubevent",
-        #         "HasLastSubevent",
-        #         "HasPrerequisite",
-        #         "HasProperty",
-        #         "HasSubevent",
-        #         # "InstanceOf",
-        #         # "IsA",
-        #         "LocatedNear",
-        #         "MadeOf",
-        #         "MannerOf",
-        #         "MotivatedByGoal",
-        #         "NotCapableOf",
-        #         "NotDesires",
-        #         "NotHasProperty",
-        #         "PartOf",
-        #         "ReceivesAction",
-        #         # "RelatedTo",
-        #         "SimilarTo",
-        #         "SymbolOf",
-        #         "Synonym",
-        #         # "UsedFor",
-        #         "capital",
-        #         "field",
-        #         "genre",
-        #         "genus",
-        #         "influencedBy",
-        #         "knownFor",
-        #         "language",
-        #         "leader",
-        #         "occupation",
-        #         "product",
-        #     ]
-        # )
-        # matcher.kb.disable_all_edges()
         super(OpenBookQAMatcher, self).__init__(tokenizer, matcher)
 
         # Add knowledge from openbook QA as composite nodes
@@ -156,15 +93,6 @@ class OpenBookQAMatcher(BaseMatcher):
 
     def add_openbook_qa_knowledge(self):
         logging.info("Adding OpenBook QA knowledge")
-        # openbook_qa_path = os.path.join(
-        #     dataset_cache_dir, "openbook_qa", "OpenBookQA-V1-Sep2018", "Data"
-        # )
-        #
-        # crowd_source_facts_path = os.path.join(
-        #     openbook_qa_path, "Additional", "crowdsourced-facts.txt"
-        # )
-        # openbook_qa_facts_path = os.path.join(openbook_qa_path, "Main", "openbook.txt")
-
         openbook_qa_path = os.path.join(
             dataset_cache_dir, "openbook_qa", "OpenBookQA-V1-Sep2018", "Data"
         )
@@ -177,26 +105,10 @@ class OpenBookQAMatcher(BaseMatcher):
                     line = line.strip("\n").strip(".").strip('"').strip("'")
                     if len(line) < 3:
                         continue
-                    # line = self.compress_knowledge(line)
                     count += 1
                     ids, mask = self.tokenize_and_mask(line)
                     self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
         logging.info(f"Added {count} composite nodes")
-
-    @staticmethod
-    def compress_knowledge(knowledge):
-        allowed_tokens = []
-        for token, pos in nltk.pos_tag(nltk.word_tokenize(knowledge)):
-            if (
-                pos.startswith("NN")
-                or pos.startswith("JJ")
-                or pos.startswith("RB")
-                or pos.startswith("VB")
-                or pos.startswith("CC")
-                or pos.startswith("CD")
-            ):
-                allowed_tokens.append(token)
-        return " ".join(allowed_tokens)
 
     def __reduce__(self):
         return OpenBookQAMatcher, (self.tokenizer,)

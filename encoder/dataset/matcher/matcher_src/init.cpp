@@ -71,6 +71,12 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("relationship"),
                  py::arg("tokenized_composite_node"),
                  py::arg("mask") = std::vector<int>{})
+            .def("add_composite_edge", &KnowledgeBase::addCompositeEdge,
+                 py::arg("source_node_id"),
+                 py::arg("relation_id"),
+                 py::arg("composite_node_id"))
+            .def("set_node_embedding", &KnowledgeBase::setNodeEmbedding)
+            .def("get_node_embedding", &KnowledgeBase::getNodeEmbedding)
             .def("set_node_embedding_file_name", &KnowledgeBase::setNodeEmbeddingFileName,
                  py::arg("path"),
                  py::arg("load_embedding_to_mem") = true)
@@ -84,6 +90,16 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("node1"),
                  py::arg("node2"),
                  py::arg("fast") = true)
+            .def("bfs_distance", &KnowledgeBase::bfsDistance,
+                 py::arg("node1"),
+                 py::arg("node2"),
+                 py::arg("max_depth") = 3)
+            .def("is_neighbor", &KnowledgeBase::isNeighbor,
+                 py::arg("node1"),
+                 py::arg("node2"))
+            .def("cosine_similarity", &KnowledgeBase::cosineSimilarity,
+                 py::arg("node1"),
+                 py::arg("node2"))
             .def("save", &KnowledgeBase::save,
                  py::arg("archive_path"))
             .def("load", &KnowledgeBase::load,
@@ -98,10 +114,21 @@ PYBIND11_MODULE(matcher, m) {
     py::class_<KnowledgeMatcher::MatchResult>(m, "MatchResult")
             .def(pybind11::init<>());
 
+    py::class_<KnowledgeMatcher::TrainInfo>(m, "TrainInfo")
+            .def(pybind11::init<>())
+            .def_readonly("added_edges", &KnowledgeMatcher::TrainInfo::addedEdges)
+            .def_readonly("train_connections", &KnowledgeMatcher::TrainInfo::trainConnections);
+
     py::class_<KnowledgeMatcher>(m, "KnowledgeMatcher")
             .def(py::init<const KnowledgeBase &>())
             .def(py::init<const std::string &>())
             .def_readwrite("kb", &KnowledgeMatcher::kb)
+            .def("get_connections_for_training", &KnowledgeMatcher::getConnectionsForTraining,
+                 py::arg("match_composite_target"),
+                 py::arg("source_sentence"),
+                 py::arg("target_sentence") = std::vector<int>{},
+                 py::arg("source_mask") = std::vector<int>{},
+                 py::arg("target_mask") = std::vector<int>{})
             .def("match_by_node_embedding", &KnowledgeMatcher::matchByNodeEmbedding,
                  py::arg("source_sentence"),
                  py::arg("target_sentence") = std::vector<int>{},
@@ -110,16 +137,7 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("max_times") = 100, py::arg("max_depth") = 3, py::arg("seed") = -1,
                  py::arg("edge_beam_width") = -1, py::arg("trim_path") = true,
                  py::arg("stop_searching_edge_if_similarity_below") = 0)
-            .def("match_by_token", &KnowledgeMatcher::matchByToken,
-                 py::arg("source_sentence"),
-                 py::arg("target_sentence") = std::vector<int>{},
-                 py::arg("source_mask") = std::vector<int>{},
-                 py::arg("target_mask") = std::vector<int>{},
-                 py::arg("max_times") = 100, py::arg("max_depth") = 3, py::arg("seed") = -1,
-                 py::arg("edge_beam_width") = -1, py::arg("trim_path") = true,
-                 py::arg("stop_searching_edge_if_similarity_below") = 0,
-                 py::arg("rank_focus") = std::vector<std::vector<int>>{},
-                 py::arg("rank_exclude") = std::vector<std::vector<int>>{})
+            .def("match_result_paths_to_strings", &KnowledgeMatcher::matchResultPathsToStrings)
             .def("join_match_results", &KnowledgeMatcher::joinMatchResults)
             .def("select_paths", &KnowledgeMatcher::selectPaths)
             .def("save", &KnowledgeMatcher::save,

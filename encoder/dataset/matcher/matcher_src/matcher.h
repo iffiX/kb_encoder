@@ -1,13 +1,14 @@
 #ifndef MATCHER_H
 #define MATCHER_H
 // Uncomment below macro to enable viewing the decision process
-//#define DEBUG_DECISION
-//#define DEBUG
+// #define DEBUG_DECISION
+// #define DEBUG
 #include "cista.h"
 #include "highfive/H5File.hpp"
 #include "highfive/H5DataSet.hpp"
 #include "highfive/H5DataSpace.hpp"
 #include "pybind11/stl.h"
+#include "pybind11/numpy.h"
 #include <string>
 #include <vector>
 #include <memory>
@@ -17,6 +18,18 @@
 
 // source id, relation id, target id, weight, annotated representation.
 using Edge = std::tuple<long, long, long, float, std::string>;
+
+template <typename T>
+class UnorderedPair {
+    T value1, value2;
+    UnorderedPair(T value1, T value2);
+    bool operator ==(const UnorderedPair &other);
+};
+
+template <typename T>
+struct UnorderedPairHash {
+    std::size_t operator()(const UnorderedPair<T> &pair) const;
+};
 
 class TrieNode {
 public:
@@ -90,6 +103,17 @@ public:
         cista::raw::string nodeEmbeddingFileName;
     };
 
+    struct ModificationArchive {
+        cista::raw::hash_map<long, cista::raw::vector<size_t>> edgeToTarget;
+        cista::raw::hash_map<long, cista::raw::vector<size_t>> edgeFromSource;
+        cista::raw::vector<SerializableEdge> newEdges;
+        cista::raw::vector<cista::raw::string> relationships;
+        cista::raw::vector<cista::raw::vector<int>> tokenizedNodes;
+        cista::raw::vector<cista::raw::vector<int>> tokenizedRelationships;
+        cista::raw::vector<cista::raw::vector<int>> tokenizedEdgeAnnotations;
+        cista::raw::vector<float> nodeEmbedding;
+    };
+
     struct VectorHash {
         std::size_t operator()(std::vector<int> const &vec) const;
     };
@@ -151,6 +175,12 @@ public:
                           const std::vector<int> &tokenizedCompositeNode,
                           const std::vector<int> &mask = {});
 
+    void addCompositeEdge(long sourceNodeId, long relationId, long compositeNodeId);
+
+    pybind11::array_t<float> getNodeEmbedding() const;
+
+    void setNodeEmbedding(pybind11::array_t<float> &embedding);
+
     void setNodeEmbeddingFileName(const std::string &path, bool loadEmbeddingToMem = true);
 
     bool isLandmarkInited() const;
@@ -158,6 +188,10 @@ public:
     void initLandmarks(int seedNum = 100, int landmarkNum = 100, int seed = -1, const std::string &landmarkPath = "");
 
     int distance(long node1, long node2, bool fast = true) const;
+
+    int bfsDistance(long node1, long node2, int maxDepth = 3) const;
+
+    bool isNeighbor(long node1, long node2) const;
 
     float cosineSimilarity(long node1, long node2) const;
 
@@ -182,13 +216,7 @@ private:
 
     void loadAdjacency();
 
-    void connectCompositeNodeToSubNode(long sourceNodeId, long relationId, long newNodeId);
-
-    bool isNeighbor(long node1, long node2) const;
-
     std::vector<int> bfsDistances(long node) const;
-
-    int bfsDistance(long node1, long node2, int maxDepth = 3) const;
 
     int landmarkDistance(long node1, long node2) const;
 
@@ -247,15 +275,26 @@ public:
         // also only store the first posision reference if there are multiple occurrences to prevent
         // duplicate knowledge.
         std::unordered_map<long, std::pair<size_t, size_t>> nodeToTokenPosition;
-
     };
+
     typedef std::unordered_map<size_t, std::tuple<size_t, std::vector<std::vector<int>>, std::vector<float>>> SelectResult;
+
+    struct TrainInfo {
+        std::vector<std::tuple<long, long, long>> addedEdges;
+        std::vector<std::tuple<long, long>> trainConnections;
+    };
+
 public:
     KnowledgeBase kb;
 public:
     explicit KnowledgeMatcher(const KnowledgeBase &knowledgeBase);
 
     explicit KnowledgeMatcher(const std::string &archivePath);
+
+    TrainInfo
+    getConnectionsForTraining(long matchCompositeTarget,
+                              const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
+                              const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {});
 
     MatchResult
     matchByNodeEmbedding(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
@@ -264,14 +303,7 @@ public:
                          int edgeBeamWidth = -1, bool trimPath = true,
                          float stopSearchingEdgeIfSimilarityBelow = 0) const;
 
-    MatchResult
-    matchByToken(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
-                 const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
-                 int maxTimes = 100, int maxDepth = 3, int seed = -1,
-                 int edgeBeamWidth = -1, bool trimPath = true,
-                 float stopSearchingEdgeIfSimilarityBelow = 0,
-                 const std::vector<std::vector<int>> &rankFocus = {},
-                 const std::vector<std::vector<int>> &rankExclude = {}) const;
+    std::vector<std::string> matchResultPathsToStrings(const MatchResult &matchResult) const;
 
     MatchResult joinMatchResults(const std::vector<MatchResult> &matchResults) const;
 

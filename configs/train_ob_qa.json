@@ -10,17 +10,17 @@
             "l2_regularization": 0,
             "learning_rate": 1e-4,
             "load": false,
-            "max_seq_length": 256,
+            "max_seq_length": 300,
             "generate_length": 16,
             "optimizer_class": "Adafactor",
             "use_matcher": true,
             "matcher_mode": "embedding",
             "matcher_config": {
-                "max_times": 1000,
+                "max_times": 500,
                 "max_depth": 2,
-                "max_edges": 10,
+                "max_edges": 20,
                 "stop_searching_edge_if_similarity_below": 0.45,
-                "discard_edges_if_rank_below": 0.7
+                "discard_edges_if_rank_below": 0
             },
             "seed": 697474,
             "save": true

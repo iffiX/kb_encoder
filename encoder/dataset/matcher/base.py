@@ -38,6 +38,12 @@ class BaseMatcher:
         self.tokenizer = tokenizer
         self.matcher = matcher
 
+    def match_composite_nodes(self, target_sentence, target_mask: str = ""):
+        target_tokens, _target_mask = self.tokenize_and_mask(
+            target_sentence, target_mask
+        )
+        return self.matcher.match_composite_nodes(target_tokens, _target_mask)
+
     def match_by_node_embedding(
         self,
         source_sentence: str,
@@ -76,57 +82,6 @@ class BaseMatcher:
             edge_beam_width=edge_beam_width,
             trim_path=trim_path,
             stop_searching_edge_if_similarity_below=stop_searching_edge_if_similarity_below,
-        )
-        return result
-
-    def match_by_token(
-        self,
-        source_sentence: str,
-        target_sentence: str = "",
-        source_mask: str = "",
-        target_mask: str = "",
-        max_times: int = 1000,
-        max_depth: int = 3,
-        seed: int = -1,
-        edge_beam_width: int = -1,
-        trim_path: bool = True,
-        stop_searching_edge_if_similarity_below: float = 0,
-        rank_focus: List[str] = None,
-        rank_exclude: List[str] = None,
-    ):
-        """
-        Returns:
-            A match result object that can be unified or be used to select paths
-        """
-        source_tokens, _source_mask = self.tokenize_and_mask(
-            source_sentence, source_mask
-        )
-        if len(target_sentence) == 0:
-            target_tokens, _target_mask = source_tokens, _source_mask
-        else:
-            target_tokens, _target_mask = self.tokenize_and_mask(
-                target_sentence, target_mask
-            )
-
-        result = self.matcher.match_by_token(
-            source_sentence=source_tokens,
-            target_sentence=target_tokens,
-            source_mask=_source_mask,
-            target_mask=_target_mask,
-            max_times=max_times,
-            max_depth=max_depth,
-            seed=seed,
-            edge_beam_width=edge_beam_width,
-            trim_path=trim_path,
-            stop_searching_edge_if_similarity_below=stop_searching_edge_if_similarity_below,
-            rank_focus=self.tokenizer(rank_focus, add_special_tokens=False).input_ids
-            if rank_focus
-            else [],
-            rank_exclude=self.tokenizer(
-                rank_exclude, add_special_tokens=False
-            ).input_ids
-            if rank_exclude
-            else [],
         )
         return result
 
