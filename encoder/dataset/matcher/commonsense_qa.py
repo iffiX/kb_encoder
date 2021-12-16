@@ -79,14 +79,14 @@ class CommonsenseQAMatcher(BaseMatcher):
             matcher = KnowledgeMatcher(archive_path)
 
         # Disable relations of similar word forms
-        matcher.kb.disable_edges_of_relationships(
-            [
-                "DerivedFrom",
-                "EtymologicallyDerivedFrom",
-                "EtymologicallyRelatedTo",
-                "FormOf",
-            ]
-        )
+        # matcher.kb.disable_edges_of_relationships(
+        #     [
+        #         "DerivedFrom",
+        #         "EtymologicallyDerivedFrom",
+        #         "EtymologicallyRelatedTo",
+        #         "FormOf",
+        #     ]
+        # )
         super(CommonsenseQAMatcher, self).__init__(tokenizer, matcher)
         # self.add_wordnet_definition()
         # self.add_generics_kb()

@@ -1,8 +1,8 @@
 #ifndef MATCHER_H
 #define MATCHER_H
 // Uncomment below macro to enable viewing the decision process
-// #define DEBUG_DECISION
-// #define DEBUG
+//#define DEBUG_DECISION
+//#define DEBUG
 #include "cista.h"
 #include "highfive/H5File.hpp"
 #include "highfive/H5DataSet.hpp"
@@ -158,6 +158,8 @@ public:
 
     void disableAllEdges();
 
+    void disableEdgesWithWeightBelow(float minWeight);
+
     void disableEdgesOfRelationships(const std::vector<std::string> &relationships);
 
     void disableEdgesOfNodes(const std::vector<std::string> &nodes);
@@ -286,10 +288,16 @@ public:
 
 public:
     KnowledgeBase kb;
+    bool isCorpusSet = false;
+    size_t corpusSize = 0;
+    std::unordered_map<long, size_t> documentCountOfNodeInCorpus;
+
 public:
     explicit KnowledgeMatcher(const KnowledgeBase &knowledgeBase);
 
     explicit KnowledgeMatcher(const std::string &archivePath);
+
+    void setCorpus(const std::vector<std::vector<int>> &corpus);
 
     TrainInfo
     getConnectionsForTraining(long matchCompositeTarget,
@@ -319,6 +327,10 @@ private:
     std::vector<int> edgeToAnnotation(size_t edgeIndex) const;
 
     std::string edgeToStringAnnotation(size_t edgeIndex) const;
+
+    float computeTfidf(long node,
+                       const std::unordered_map<long, size_t> &nodeCount,
+                       const std::unordered_map<size_t, std::vector<int>> &nodeMatch) const;
 
     void matchForSourceAndTarget(const std::vector<int> &sourceSentence,
                                  const std::vector<int> &targetSentence,

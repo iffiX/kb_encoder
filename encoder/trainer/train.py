@@ -7,6 +7,7 @@ from .qa_trainer import QATrainer
 from .glue_trainer import GLUETrainer
 from .commonsense_qa_trainer import CommonsenseQATrainer
 from .openbook_qa_trainer import OpenBookQATrainer
+from .openbook_qa_with_search_trainer import OpenBookQAWithSearchTrainer
 from .ensemble_trainer import EnsembleTrainer
 from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
@@ -18,6 +19,7 @@ stage_name_to_trainer_map = {
     "glue": GLUETrainer,
     "commonsense_qa": CommonsenseQATrainer,
     "openbook_qa": OpenBookQATrainer,
+    "openbook_qa_with_search": OpenBookQAWithSearchTrainer,
     "ensemble": EnsembleTrainer,
 }
 

@@ -4,9 +4,10 @@ import json
 import pickle
 import difflib
 import logging
-import numpy as np
+import nltk
 import torch as t
 from typing import List
+from nltk.stem import WordNetLemmatizer
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, BatchEncoding
 from encoder.dataset.matcher.openbook_qa import OpenBookQAMatcher
 from encoder.utils.settings import (
@@ -22,7 +23,7 @@ from encoder.utils.inspect import save_inspect_data
 from .base import StaticIterableDataset
 
 
-class OpenBookQADataset:
+class OpenBookQAWithSearchDataset:
     OPENBOOK_QA_URL = (
         "https://ai2-public-datasets.s3.amazonaws.com/open-book-qa/"
         "OpenBookQA-V1-Sep2018.zip"
@@ -37,8 +38,8 @@ class OpenBookQADataset:
         matcher_mode: str = "embedding",
         matcher_seed: int = -1,
         matcher_config: dict = None,
+        include_prefix: bool = False,
         include_option_label_in_sentence: bool = False,
-        include_option_label_in_answer_and_choices: bool = False,
         use_option_label_as_answer_and_choices: bool = False,
         insert_answers_at_end: bool = False,
         match_closest_when_no_equal: bool = True,
@@ -53,10 +54,8 @@ class OpenBookQADataset:
         self.matcher_mode = matcher_mode
         self.matcher_seed = matcher_seed
         self.matcher_config = matcher_config
+        self.include_prefix = include_prefix
         self.include_option_label_in_sentence = include_option_label_in_sentence
-        self.include_option_label_in_answer_and_choices = (
-            include_option_label_in_answer_and_choices
-        )
         self.insert_answers_at_end = insert_answers_at_end
         self.use_option_label_as_answer_and_choices = (
             use_option_label_as_answer_and_choices
@@ -88,7 +87,9 @@ class OpenBookQADataset:
             "Additional",
             "test_complete.jsonl",
         )
-        archive_path = os.path.join(preprocess_cache_dir, "openbook_qa.data")
+        archive_path = os.path.join(
+            preprocess_cache_dir, "openbook_qa_with_search.data"
+        )
         if not os.path.exists(openbook_qa_path):
             if not os.path.exists(str(openbook_qa_path) + ".zip"):
                 logging.info("Downloading OpenBook QA")
@@ -107,8 +108,6 @@ class OpenBookQADataset:
             if (
                 data["max_seq_length"] != self.max_seq_length
                 or data["generate_length"] != self.generate_length
-                or data["include_option_label_in_answer_and_choices"]
-                != self.include_option_label_in_answer_and_choices
                 or data["include_option_label_in_sentence"]
                 != self.include_option_label_in_sentence
                 or data["use_option_label_as_answer_and_choices"]
@@ -116,7 +115,7 @@ class OpenBookQADataset:
             ):
                 if regenerate:
                     logging.info(
-                        "Configuration mismatch, regenerating OpenBook QA dataset."
+                        "Configuration mismatch, regenerating OpenBook QA (With search) dataset."
                     )
                     self.train_data = self.parse_data(train_path)
                     self.validate_data = self.parse_data(validate_path)
@@ -128,30 +127,56 @@ class OpenBookQADataset:
                 self.train_data = data["train"]
                 self.validate_data = data["validate"]
                 self.test_data = data["test"]
-
-        self.train_matching()
-
-    @property
-    def train_dataset(self):
-        return StaticIterableDataset(len(self.train_data), self.generator, ("train",),)
+        self.validate_search_targets = {}
+        self.test_search_targets = {}
+        self.set_corpus()
 
     @property
-    def validate_dataset(self):
+    def train_qa_dataset(self):
         return StaticIterableDataset(
-            len(self.validate_data), self.generator, ("validate",)
+            len(self.train_data), self.qa_generator, ("train",),
         )
 
     @property
-    def test_dataset(self):
-        return StaticIterableDataset(len(self.test_data), self.generator, ("test",))
+    def validate_qa_dataset(self):
+        return StaticIterableDataset(
+            len(self.validate_data), self.qa_generator, ("validate",)
+        )
 
-    def generator(self, index: int, split: str):
+    @property
+    def test_qa_dataset(self):
+        return StaticIterableDataset(len(self.test_data), self.qa_generator, ("test",))
+
+    @property
+    def train_search_dataset(self):
+        return StaticIterableDataset(
+            len(self.train_data), self.search_generator, ("train",),
+        )
+
+    @property
+    def validate_search_dataset(self):
+        return StaticIterableDataset(
+            len(self.validate_data), self.search_generator, ("validate",)
+        )
+
+    @property
+    def test_search_dataset(self):
+        return StaticIterableDataset(
+            len(self.test_data), self.search_generator, ("test",)
+        )
+
+    def qa_generator(self, index: int, split: str):
         if split == "train":
             data = self.train_data[index]
+            search_targets = {}
         elif split == "validate":
             data = self.validate_data[index]
-        else:
+            search_targets = self.validate_search_targets
+        elif split == "test":
             data = self.test_data[index]
+            search_targets = self.test_search_targets
+        else:
+            raise ValueError(f"Invalid split: {split}")
         if self.use_matcher:
             # prevent any modification to data, also prevent checkpoint storing
             # data to gpu by moving
@@ -173,65 +198,21 @@ class OpenBookQADataset:
                     for k, v in matcher_config.items()
                     if k in ("max_edges", "discard_edges_if_rank_below")
                 }
-                # matches = [
-                #     self.matcher.match_by_node_embedding(
-                #         data["text_question"] + " " + choice,
-                #         target_sentence=data["text_question"] + " " + choice,
-                #         seed=self.matcher_seed,
-                #         **match_config,
-                #     )
-                #     for choice in data["choices"]
-                # ]
-                # match = self.matcher.unify_match(matches)
-                # selection = self.matcher.select_paths(match, **select_config)
-                # new_question = self.matcher.insert_selection(
-                #     data["text_question"], selection, insert_at_end=True,
-                # )
 
-                # match = self.matcher.match_by_node_embedding(
-                #     data["text_choices"],
-                #     target_sentence=data["fact"] + data["text_question"],
-                #     seed=self.matcher_seed,
-                #     **match_config,
-                # )
-                # selection = self.matcher.select_paths(match, **select_config)
-                # new_choices = self.matcher.insert_selection(
-                #     data["text_choices"],
-                #     selection,
-                #     insert_at_end=self.insert_answers_at_end,
-                # )
-
-                # fact = data["fact"]
-                # fact = ""
-                import nltk
-                from nltk.stem import WordNetLemmatizer
-
-                wnl = WordNetLemmatizer()
-
-                tokens = nltk.word_tokenize(data["fact"])
-                allowed_tokens = []
-                for token, pos in nltk.pos_tag(tokens):
-                    if (
-                        pos.startswith("NN")
-                        # or pos.startswith("JJ")
-                        # or (
-                        #     pos.startswith("VB")
-                        #     and token not in self.matcher.VERB_FILTER_SET
-                        # )
-                    ):
-                        allowed_tokens.append(wnl.lemmatize(token))
-                # fact = " ".join(set(allowed_tokens))
-                fact = (
-                    " ".join(sorted(list(set(allowed_tokens))))
-                    + " "
-                    + data["text_question"]
-                )
-                # print(f"Guider: [{fact}]")
+                if split == "train":
+                    search_target = (
+                        " ".join(data["target"]) + " " + data["text_question"]
+                    )
+                else:
+                    if data["id"] not in search_targets:
+                        raise ValueError("Set search targets first")
+                    search_target = (
+                        search_targets[data["id"]] + " " + data["text_question"]
+                    )
 
                 match = self.matcher.match_by_node_embedding(
                     data["text_question"],
-                    # target_sentence=fact + " " + data["text_question"],
-                    target_sentence=fact,
+                    target_sentence=search_target,
                     seed=self.matcher_seed,
                     **match_config,
                 )
@@ -240,10 +221,19 @@ class OpenBookQADataset:
                     data["text_question"], selection, insert_at_end=True,
                 )
 
+                choice_mask = "+" * len(data["text_choices"])
+                for choice in ("[A]", "[B]", "[C]", "[D]"):
+                    start_pos = data["text_choices"].find(choice)
+                    if start_pos != -1:
+                        choice_mask = (
+                            choice_mask[:start_pos]
+                            + "-" * len(choice)
+                            + choice_mask[start_pos + len(choice) :]
+                        )
                 match = self.matcher.match_by_node_embedding(
                     data["text_choices"],
-                    # target_sentence=fact + " " + data["text_question"],
-                    target_sentence=fact,
+                    target_sentence=search_target,
+                    source_mask=choice_mask,
                     seed=self.matcher_seed,
                     max_depth=1,
                     max_times=1000,
@@ -256,79 +246,70 @@ class OpenBookQADataset:
                     new_choices = new_choices.replace(
                         f"[ {choice} ]", f"[{choice.upper()}]"
                     )
-                # match = self.matcher.match_by_node_embedding(
-                #     data["text_question"] + " " + data["text_choices"],
-                #     target_sentence=data["text_question"],
-                #     seed=self.matcher_seed,
-                #     **match_config,
-                # )
-                # selection = self.matcher.select_paths(match, **select_config)
-                # new_sentence = self.matcher.insert_selection(
-                #     data["text_question"] + " " + data["text_choices"],
-                #     selection,
-                #     insert_at_end=True,
-                # )
             elif self.matcher_mode == "none":
                 new_question = data["text_question"]
+                new_choices = data["text_choices"]
             else:
                 raise ValueError(f"Invalid match mode {self.matcher_mode}")
 
             encoded_sentence = self.tokenizer(
-                new_question,
+                new_question if not self.include_prefix else "predict: " + new_question,
                 new_choices,
                 padding="max_length",
                 max_length=self.max_seq_length,
                 truncation=True,
                 return_tensors="pt",
             )
-            # encoded_sentence = self.tokenizer(
-            #     new_question,
-            #     data["text_choices"],
-            #     padding="max_length",
-            #     max_length=self.max_seq_length,
-            #     truncation=True,
-            #     return_tensors="pt",
-            # )
-            # encoded_sentence = self.tokenizer(
-            #     data["text_question"],
-            #     new_choices,
-            #     padding="max_length",
-            #     max_length=self.max_seq_length,
-            #     truncation=True,
-            #     return_tensors="pt",
-            # )
-            # encoded_sentence = self.tokenizer(
-            #     new_sentence,
-            #     padding="max_length",
-            #     max_length=self.max_seq_length,
-            #     truncation=True,
-            #     return_tensors="pt",
-            # )
             data["org_sentence"] = data["sentence"]
             data["org_mask"] = data["mask"]
             data["sentence"] = encoded_sentence.input_ids
             data["mask"] = encoded_sentence.attention_mask
-
         return data
 
-    def validate_logits(self, batch: BatchEncoding, logits: t.Tensor):
-        """
-        For use with a classifier model
-        """
-        logits = logits.cpu().numpy()
-        labels = np.argmax(logits, axis=1)
-        ref_labels = batch["label"].cpu().numpy()
-        return {"accuracy": float(np.sum(labels == ref_labels)) / labels.shape[0]}
+    def search_generator(self, index: int, split: str):
+        if split == "train":
+            data = self.train_data[index]
+        elif split == "validate":
+            data = self.validate_data[index]
+        elif split == "test":
+            data = self.test_data[index]
+        else:
+            raise ValueError(f"Invalid split: {split}")
 
-    def validate_tokens(self, batch: BatchEncoding, tokens: t.Tensor):
-        """
-        For use with a classifier model
-        """
+        data = copy.deepcopy(data)
+
+        encoded_sentence = self.tokenizer(
+            data["text_question"]
+            if not self.include_prefix
+            else "search: " + data["text_question"],
+            data["text_choices"],
+            padding="max_length",
+            max_length=self.max_seq_length,
+            truncation=True,
+            return_tensors="pt",
+        )
+        answer = self.tokenizer.encode(
+            " ".join(data["target"]),
+            padding="max_length",
+            max_length=self.generate_length,
+            truncation=True,
+            return_tensors="pt",
+        )
+        # Use -100 to focus on training the answer part, rather than pad
+        # tokens
+        answer.masked_fill_(answer == self.tokenizer.pad_token_id, -100)
+
+        data["sentence"] = encoded_sentence.input_ids
+        data["mask"] = encoded_sentence.attention_mask
+        data["answer"] = answer
+        return data
+
+    def validate_qa(self, batch: BatchEncoding, tokens: t.Tensor):
         total = tokens.shape[0]
         correct = 0
         approximately_correct = 0
         missing = 0
-        answers = {}
+        is_answer_correct = {}
         for i in range(tokens.shape[0]):
             answer = self.tokenizer.decode(tokens[i], skip_special_tokens=True)
             ref_answer_tensor = batch["answer"][i]
@@ -341,10 +322,10 @@ class OpenBookQADataset:
             sentence = self.tokenizer.decode(
                 batch["sentence"][i], skip_special_tokens=True
             )
-            answers[batch["id"][i]] = False
+            is_answer_correct[batch["id"][i]] = False
             if answer == ref_answer:
                 correct += 1
-                answers[batch["id"][i]] = True
+                is_answer_correct[batch["id"][i]] = True
             elif answer not in batch["choices"][i]:
                 print(
                     f"sentence: [{sentence}] \n"
@@ -363,7 +344,7 @@ class OpenBookQADataset:
                     elif possible_matches[0] == ref_answer:
                         approximately_correct += 1
                         correct += 1
-                        answers[batch["id"][i]] = True
+                        is_answer_correct[batch["id"][i]] = True
                 else:
                     missing += 1
             else:
@@ -377,25 +358,47 @@ class OpenBookQADataset:
         if self.match_closest_when_no_equal:
             print(f"Approximately correct ratio {float(approximately_correct) / total}")
 
-        save_inspect_data(answers, "openbook_qa_val_answers")
+        save_inspect_data(is_answer_correct, "openbook_qa_val_answers")
         return {"accuracy": float(correct) / total}
 
-    def generate_test_results_logits(self, logits: t.Tensor, directory: str):
-        logits = logits.cpu().numpy()
-        labels = np.argmax(logits, axis=1).tolist()
-        with open_file_with_create_directories(
-            os.path.join(directory, "openbook_qa.csv"), "w"
-        ) as file:
-            if len(labels) != len(self.test_data):
-                raise ValueError(
-                    f"Label size {len(labels)} does not match "
-                    f"test size {len(self.test_data)}"
-                )
-            answer_keys = ["A", "B", "C", "D"]
-            for label, preprocessed in zip(labels, self.test_data):
-                file.write(f"{preprocessed['id']},{answer_keys[label]}")
+    def validate_search(self, batch: BatchEncoding, tokens: t.Tensor):
+        total = tokens.shape[0]
+        total_f1 = 0
+        for i in range(tokens.shape[0]):
+            answer = self.tokenizer.decode(tokens[i], skip_special_tokens=True)
+            ref_answer_tensor = batch["answer"][i]
+            ref_answer_tensor.masked_fill_(
+                ref_answer_tensor == -100, self.tokenizer.pad_token_id
+            )
+            ref_answer = self.tokenizer.decode(
+                ref_answer_tensor, skip_special_tokens=True
+            )
+            sentence = self.tokenizer.decode(
+                batch["sentence"][i], skip_special_tokens=True
+            )
 
-    def generate_test_results_tokens(self, tokens: t.Tensor, directory: str):
+            keywords = set(nltk.word_tokenize(answer.lower()))
+            ref_keywords = set(nltk.word_tokenize(ref_answer.lower()))
+            intersection = ref_keywords.intersection(keywords)
+
+            if len(ref_keywords) == 0:
+                f1 = 1
+            else:
+                precision = len(intersection) / (len(keywords) + 1e-6)
+                recall = len(intersection) / (len(ref_keywords) + 1e-6)
+                f1 = (2 * precision * recall) / (precision + recall + 1e-6)
+
+            total_f1 += f1
+            print(
+                f"sentence: [{sentence}] \n"
+                f"keywords: [{keywords}] \n"
+                f"ref_keywords: [{ref_keywords}] \n"
+                f"f1: {f1}"
+            )
+
+        return {"f1": total_f1 / total}
+
+    def generate_test_results(self, tokens: t.Tensor, directory: str):
         missing = 0
         with open_file_with_create_directories(
             os.path.join(directory, "openbook_qa.csv"), "w"
@@ -421,10 +424,25 @@ class OpenBookQADataset:
                     file.write(f"{preprocessed['id']},A")
         print(f"Missing ratio {float(missing)/len(self.test_data)}")
 
-    def train_matching(self):
-        train_result_path = os.path.join(
-            preprocess_cache_dir, "openbook_qa_match_train_result.data",
-        )
+    def set_search_target(self, tokens: t.Tensor, split: str, id):
+        if split == "validate":
+            split_data = self.validate_data
+            search_targets = self.validate_search_targets
+        elif split == "test":
+            split_data = self.test_data
+            search_targets = self.test_search_targets
+        else:
+            raise ValueError(f"Invalid split: {split}")
+        if tokens.ndim != 1:
+            raise ValueError("Token tensor must have a dimension number of 1")
+        found = any(d["id"] == id for d in split_data)
+        if not found:
+            raise ValueError(f"Id {id} not found in split {split}")
+        raw_search_target = self.tokenizer.decode(tokens, skip_special_tokens=True)
+        search_target = sorted(list(set(nltk.word_tokenize(raw_search_target.lower()))))
+        search_targets[id] = " ".join(search_target)
+
+    def set_corpus(self):
         corpus = []
         for data in self.train_data:
             corpus.append(
@@ -433,101 +451,7 @@ class OpenBookQADataset:
                     add_special_tokens=False,
                 )
             )
-        # tmp = os.path.join(preprocess_cache_dir, "openbook_qa_corpus.data")
-        # if not os.path.exists(tmp):
-        #     with open("/home/iffi/Downloads/ARC_Corpus.txt", "r") as file:
-        #         for idx, line in enumerate(file):
-        #             if idx % 3 == 0:
-        #                 corpus.append(
-        #                     self.matcher.tokenizer.encode(
-        #                         line, add_special_tokens=False,
-        #                     )
-        #                 )
-        #     with open(tmp, "wb") as file:
-        #         pickle.dump(corpus, file)
-        # else:
-        #     with open(tmp, "rb") as file:
-        #         corpus = pickle.load(file)
-        print("Corpus loaded, begin setting")
         self.matcher.matcher.set_corpus(corpus)
-
-        # if not os.path.exists(train_result_path):
-        #     logging.info("Training OpenBook QA Matcher")
-        #     train_info = []
-        #     for data in tqdm(self.train_data, desc="Find connection"):
-        #         source_sentence = data["text_question"]
-        #         target_sentence = data["text_question"]
-        #         source_tokens, source_mask = self.matcher.tokenize_and_mask(
-        #             source_sentence
-        #         )
-        #         target_tokens, target_mask = self.matcher.tokenize_and_mask(
-        #             target_sentence
-        #         )
-        #         match_target = self.matcher.matcher.kb.find_nodes([data["fact"]])[0]
-        #         train_info.append(
-        #             self.matcher.matcher.get_connections_for_training(
-        #                 match_target,
-        #                 source_tokens,
-        #                 target_tokens,
-        #                 source_mask,
-        #                 target_mask,
-        #             )
-        #         )
-        #     train_connections = [x for ti in train_info for x in ti.train_connections]
-        #     added_edges = [x for ti in train_info for x in ti.added_edges]
-        #     org_embedding = t.tensor(self.matcher.matcher.kb.get_node_embedding())
-        #     embedding = t.nn.Parameter(
-        #         t.tensor(
-        #             self.matcher.matcher.kb.get_node_embedding(), requires_grad=True
-        #         )
-        #     )
-        #     optimizer = t.optim.SGD([embedding], lr=1e-1)
-        #     tr = trange(200, desc="Train connection")
-        #     last_loss = 100000000
-        #     used_node_num = len(
-        #         set(
-        #             [tc[0] for tc in train_connections]
-        #             + [tc[1] for tc in train_connections]
-        #         )
-        #     )
-        #     for _ in tr:
-        #         sim_loss = (
-        #             (
-        #                 (
-        #                     embedding[[tc[0] for tc in train_connections]].detach()
-        #                     - embedding[[tc[1] for tc in train_connections]]
-        #                 )
-        #                 ** 2
-        #             )
-        #             .sum(dim=1)
-        #             .mean()
-        #         )
-        #         keep_original_loss = ((embedding - org_embedding) ** 2).sum(
-        #             dim=1
-        #         ).mean() * (embedding.shape[0] / used_node_num)
-        #         loss = keep_original_loss * 0.5 + sim_loss * 0.5
-        #         loss.backward()
-        #         optimizer.step()
-        #         tr.set_description(
-        #             f"Train connection (loss={loss:.4f}, "
-        #             f"sim_loss={sim_loss:.4f}, "
-        #             f"keep_loss={keep_original_loss:.4f})"
-        #         )
-        #         if loss > last_loss or keep_original_loss > 0.03:
-        #             break
-        #         last_loss = loss.item()
-        #     new_embedding = embedding.detach().numpy()
-        #     self.matcher.matcher.kb.set_node_embedding(new_embedding)
-        #     with open(train_result_path, "wb") as dump_file:
-        #         pickle.dump(
-        #             {"added_edges": added_edges, "embedding": new_embedding}, dump_file,
-        #         )
-        # else:
-        #     with open(train_result_path, "rb") as dump_file:
-        #         save = pickle.load(dump_file)
-        #     for add_edge in save["added_edges"]:
-        #         self.matcher.matcher.kb.add_composite_edge(*add_edge)
-        #     self.matcher.matcher.kb.set_node_embedding(save["embedding"])
 
     def parse_data(self, path):
         data = []
@@ -536,7 +460,6 @@ class OpenBookQADataset:
             hasattr(self.tokenizer, "sep_token")
             and self.tokenizer.sep_token is not None
         ):
-            # BERT, ALBERT, ROBERTA
             sep = self.tokenizer.sep_token
         elif (
             hasattr(self.tokenizer, "eos_token")
@@ -564,19 +487,14 @@ class OpenBookQADataset:
                         entry["question"]["stem"] + "?" + f"  " + sentence_choices
                     )
                 encoded_sentence = self.tokenizer(
-                    org_sentence,
+                    "predict: " + org_sentence,
                     padding="max_length",
                     max_length=self.max_seq_length,
                     truncation=True,
                     return_tensors="pt",
                 )
 
-                if self.include_option_label_in_answer_and_choices:
-                    choices = [
-                        f"[{ch['label'].upper()}] {ch['text'].lower().strip(',')}"
-                        for ch in entry["question"]["choices"]
-                    ]
-                elif self.use_option_label_as_answer_and_choices:
+                if self.use_option_label_as_answer_and_choices:
                     choices = [
                         f"[{ch['label'].upper()}]"
                         for ch in entry["question"]["choices"]
@@ -592,25 +510,12 @@ class OpenBookQADataset:
                     "text_question": entry["question"]["stem"] + "?",
                     "text_choices": sentence_choices,
                     "fact": entry["fact1"],
+                    "target": self.get_gold_search_target(entry["fact1"]),
                     "choices": choices,
                     "id": entry["id"],
                 }
                 if "answerKey" in entry:
-                    # For BERT, ALBERT, ROBERTA, use label instead, which is an integer
-                    preprocessed["label"] = [
-                        i
-                        for i, ch in enumerate(entry["question"]["choices"])
-                        if ch["label"] == entry["answerKey"]
-                    ][0]
-
-                    # For T5, use answer
-                    if self.include_option_label_in_answer_and_choices:
-                        answer = [
-                            f"[{ch['label'].upper()}] {ch['text'].lower().strip(',')}"
-                            for ch in entry["question"]["choices"]
-                            if ch["label"] == entry["answerKey"]
-                        ][0]
-                    elif self.use_option_label_as_answer_and_choices:
+                    if self.use_option_label_as_answer_and_choices:
                         answer = [
                             f"[{ch['label'].upper()}]"
                             for ch in entry["question"]["choices"]
@@ -637,6 +542,16 @@ class OpenBookQADataset:
                 data.append(preprocessed)
         return data
 
+    def get_gold_search_target(self, fact: str):
+        tokens = nltk.word_tokenize(fact.lower())
+        wnl = WordNetLemmatizer()
+        allowed_tokens = []
+        for token, pos in nltk.pos_tag(tokens):
+            if pos.startswith("NN"):
+                allowed_tokens.append(wnl.lemmatize(token))
+        search_target = sorted(list(set(allowed_tokens)))
+        return search_target
+
     def save(self, archive_path):
         with open_file_with_create_directories(archive_path, "wb") as file:
             pickle.dump(
@@ -647,7 +562,6 @@ class OpenBookQADataset:
                     "max_seq_length": self.max_seq_length,
                     "generate_length": self.generate_length,
                     "include_option_label_in_sentence": self.include_option_label_in_sentence,
-                    "include_option_label_in_answer_and_choices": self.include_option_label_in_answer_and_choices,
                     "use_option_label_as_answer_and_choices": self.use_option_label_as_answer_and_choices,
                 },
                 file,

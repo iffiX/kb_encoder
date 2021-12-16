@@ -60,6 +60,7 @@ PYBIND11_MODULE(matcher, m) {
             .def_readwrite("tokenized_edge_annotations", &KnowledgeBase::tokenizedEdgeAnnotations)
             .def("clear_disabled_edges", &KnowledgeBase::clearDisabledEdges)
             .def("disable_all_edges", &KnowledgeBase::disableAllEdges)
+            .def("disable_edges_with_weight_below", &KnowledgeBase::disableEdgesWithWeightBelow)
             .def("disable_edges_of_nodes", &KnowledgeBase::disableEdgesOfNodes)
             .def("disable_edges_of_relationships", &KnowledgeBase::disableEdgesOfRelationships)
             .def("find_nodes", &KnowledgeBase::findNodes)
@@ -123,6 +124,9 @@ PYBIND11_MODULE(matcher, m) {
             .def(py::init<const KnowledgeBase &>())
             .def(py::init<const std::string &>())
             .def_readwrite("kb", &KnowledgeMatcher::kb)
+            .def_readonly("corpus_size", &KnowledgeMatcher::corpusSize)
+            .def_readonly("document_count_of_node_in_corpus", &KnowledgeMatcher::documentCountOfNodeInCorpus)
+            .def("set_corpus", &KnowledgeMatcher::setCorpus)
             .def("get_connections_for_training", &KnowledgeMatcher::getConnectionsForTraining,
                  py::arg("match_composite_target"),
                  py::arg("source_sentence"),

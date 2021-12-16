@@ -1,6 +1,7 @@
 #define FMT_HEADER_ONLY
 
 #include "matcher.h"
+#include "tqdm.h"
 #include "fmt/format.h"
 #include "xtensor/xio.hpp"
 #include "xtensor/xsort.hpp"
@@ -20,7 +21,7 @@
 // A number large enough to represent unreachability, but not enough to overflow int
 #define DISTANCE_MAX 1000000
 #define SPLIT_NODE_MINIMUM_EDGE_NUM 20
-
+#define SPLIT_NODE_MINIMUM_SIMILARITY 0.5
 using namespace std;
 
 int lcs(const vector<int> &x, const vector<int> &y) {
@@ -261,6 +262,13 @@ void KnowledgeBase::disableAllEdges() {
     isEdgeDisabled.resize(edges.size(), true);
 }
 
+void KnowledgeBase::disableEdgesWithWeightBelow(float minWeight) {
+    for(size_t edgeIndex = 0; edgeIndex < edges.size(); edgeIndex++) {
+        if (get<3>(edges[edgeIndex]) < minWeight)
+            isEdgeDisabled[edgeIndex] = true;
+    }
+}
+
 void KnowledgeBase::disableEdgesOfRelationships(const vector<string> &rel) {
     unordered_set<string> disabledSet(rel.begin(), rel.end());
     unordered_set<long> disabledIds;
@@ -396,14 +404,14 @@ void KnowledgeBase::addCompositeNode(const string &compositeNode,
         if (not valid)
             continue;
 
-        long sourceNodeId = nodeMap.at(subNode.second.back());
-        bool hasOut = edgeFromSource.find(sourceNodeId) != edgeFromSource.end();
-        bool hasIn = edgeToTarget.find(sourceNodeId) != edgeToTarget.end();
-        size_t outSize = hasOut ? edgeFromSource.at(sourceNodeId).size() : 0;
-        size_t inSize = hasIn ? edgeToTarget.at(sourceNodeId).size() : 0;
+        long subNodeId = nodeMap.at(subNode.second.back());
+        bool hasOut = edgeFromSource.find(subNodeId) != edgeFromSource.end();
+        bool hasIn = edgeToTarget.find(subNodeId) != edgeToTarget.end();
+        size_t outSize = hasOut ? edgeFromSource.at(subNodeId).size() : 0;
+        size_t inSize = hasIn ? edgeToTarget.at(subNodeId).size() : 0;
         if (outSize + inSize < SPLIT_NODE_MINIMUM_EDGE_NUM) {
 #ifdef DEBUG
-            cout << fmt::format("Splitting node [{}:{}]", nodes[sourceNodeId], sourceNodeId) << endl;
+            cout << fmt::format("Splitting node [{}:{}]", nodes[subNodeId], subNodeId) << endl;
 #endif
             unordered_map<size_t, vector<vector<int>>> subSubMatches = nodeTrie.matchForAll(
                 subNode.second.back(), true);
@@ -411,23 +419,36 @@ void KnowledgeBase::addCompositeNode(const string &compositeNode,
                 // When splitting node ABC
                 // Might insert A, AB, ABC, B, BC, C
                 for(auto& baseMatch : subSubMatch.second) {
-                    long baseNodeId = nodeMap.at(baseMatch);
-                    if (connectedSource.find(baseNodeId) != connectedSource.end())
-                        continue;
-                    connectedSource.insert(baseNodeId);
-                    components.push_back(baseNodeId);
-                    compositeComponentCount[sourceNodeId] += 1;
-                    addCompositeEdge(baseNodeId, relationId, newNodeId);
+                    bool baseValid = true;
+                    if (not mask.empty()) {
+                        baseValid = false;
+                        for(size_t i = 0; i < baseMatch.size(); i++) {
+                            if (mask[subSubMatch.first + subNode.first + i] == 1) {
+                                baseValid = true;
+                            }
+                        }
+                    }
+                    if (baseValid) {
+                        long baseNodeId = nodeMap.at(baseMatch);
+                        if (cosineSimilarity(baseNodeId, subNodeId) > SPLIT_NODE_MINIMUM_SIMILARITY) {
+                            if (connectedSource.find(baseNodeId) != connectedSource.end())
+                                continue;
+                            connectedSource.insert(baseNodeId);
+                            components.push_back(baseNodeId);
+                            compositeComponentCount[subNodeId] += 1;
+                            addCompositeEdge(baseNodeId, relationId, newNodeId);
+                        }
+                    }
                 }
             }
         }
         else {
-            if (connectedSource.find(sourceNodeId) != connectedSource.end())
+            if (connectedSource.find(subNodeId) != connectedSource.end())
                 continue;
-            connectedSource.insert(sourceNodeId);
-            components.push_back(sourceNodeId);
-            compositeComponentCount[sourceNodeId] += 1;
-            addCompositeEdge(sourceNodeId, relationId, newNodeId);
+            connectedSource.insert(subNodeId);
+            components.push_back(subNodeId);
+            compositeComponentCount[subNodeId] += 1;
+            addCompositeEdge(subNodeId, relationId, newNodeId);
         }
     }
     compositeNodes.emplace(newNodeId, components);
@@ -1035,6 +1056,28 @@ KnowledgeMatcher::KnowledgeMatcher(const string &archivePath) {
     cout << "[KM] Matcher initialized" << endl;
 }
 
+void KnowledgeMatcher::setCorpus(const std::vector<std::vector<int>> &corpus) {
+    isCorpusSet = true;
+    documentCountOfNodeInCorpus.clear();
+    corpusSize = corpus.size();
+    tqdm bar;
+    bar.set_theme_basic();
+    bar.disable_colors();
+    cout << "Begin processing corpus." << endl;
+    size_t processed = 0;
+    for (auto &document : corpus) {
+        auto result = kb.nodeTrie.matchForAll(document, false);
+        unordered_set<long> insertedSubNodes;
+        for(auto &subNode : result) {
+            long subNodeId = kb.nodeMap.at(subNode.second.back());
+            documentCountOfNodeInCorpus[subNodeId] += 1;
+        }
+        processed++;
+        bar.progress(processed, corpus.size());
+    }
+    bar.finish();
+}
+
 KnowledgeMatcher::TrainInfo
 KnowledgeMatcher::getConnectionsForTraining(long matchCompositeTarget,
                                             const std::vector<int> &sourceSentence,
@@ -1105,7 +1148,7 @@ KnowledgeMatcher::getConnectionsForTraining(long matchCompositeTarget,
                     best = sourceNodeId;
                 }
             }
-            if (connectedSource.find(best) == connectedSource.end()) {
+            if (sourceNodeSim > 0.45 && connectedSource.find(best) == connectedSource.end()) {
                 connectedSource.insert(best);
                 //candidateNodeIds.push_back(best);
                 kb.addCompositeEdge(best, relationId, matchCompositeTarget);
@@ -1222,6 +1265,13 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
         seed = rd();
     }
 
+#ifdef DEBUG_DECISION
+    for(auto &tNode : targetNodes)
+        cout << fmt::format("tfidf of node [{}:{}], {}",
+                            kb.nodes[tNode.first],
+                            tNode.first, computeTfidf(tNode.first, targetNodes, targetMatch)) <<endl;
+#endif
+
     if (maxTimes < 2 * int(nodes.size()))
         cout << "Parameter maxTimes " << maxTimes << " is smaller than 2 * node size " << nodes.size()
              << ", which may result in insufficient exploration, consider increase maxTimes." << endl;
@@ -1290,109 +1340,69 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
 #endif
                 }
                 else {
-//                    float precision = 1e-4, recall = 1e-4,
-//                          precision_idf_sum = 0, recall_idf_sum = 0;
-//                    bool isNodeComposite = kb.isNodeComposite[otherNodeId];
-//
-//                    if (isNodeComposite) {
-//                        for (auto &tNode : targetNodes) {
-//                            float subNodeSim = -1, simToEachTarget = -1;
-//                            long subNodeBest = -1;
-//
-//                            for (long subNodeId : kb.compositeNodes.at(otherNodeId)) {
-//                                auto simPair = make_pair(tNode.first, subNodeId);
-//                                if (similarityCache.find(simPair) == similarityCache.end()) {
-//                                    simToEachTarget = kb.cosineSimilarity(subNodeId, tNode.first);
-//                                    similarityCache[simPair] = simToEachTarget;
-//                                } else {
-//                                    simToEachTarget = similarityCache.at(simPair);
-//                                }
-//                                if (simToEachTarget > subNodeSim) {
-//                                    subNodeSim = simToEachTarget;
-//                                    subNodeBest = subNodeId;
-//                                }
-//                            }
-//
-//                            float documentCount = 1;
-//                            if (kb.compositeComponentCount.find(tNode.first) != kb.compositeComponentCount.end())
-//                                documentCount += kb.compositeComponentCount.at(tNode.first);
-//                            float idf = log10(float(kb.compositeNodes.size()) / documentCount);
-//
-//                            recall += subNodeSim * idf;
-//                            recall_idf_sum += idf;
-//                        }
-//
-//                        for (long subNodeId : kb.compositeNodes.at(otherNodeId)) {
-//                            float tNodeSim = -1, simToEachTarget = -1;
-//                            long tNodeBest = -1;
-//
-//                            for (auto &tNode : targetNodes) {
-//                                auto simPair = make_pair(tNode.first, subNodeId);
-//                                if (similarityCache.find(simPair) == similarityCache.end()) {
-//                                    simToEachTarget = kb.cosineSimilarity(subNodeId, tNode.first);
-//                                    similarityCache[simPair] = simToEachTarget;
-//                                } else {
-//                                    simToEachTarget = similarityCache.at(simPair);
-//                                }
-//                                if (simToEachTarget > tNodeSim) {
-//                                    tNodeSim = simToEachTarget;
-//                                    tNodeBest = tNode.first;
-//                                }
-//                            }
-//
-//                            float documentCount = 1;
-//                            if (kb.compositeComponentCount.find(subNodeId) != kb.compositeComponentCount.end())
-//                                documentCount += kb.compositeComponentCount.at(subNodeId);
-//                            float idf = log10(float(kb.compositeNodes.size()) / documentCount);
-//
-//                            precision += tNodeSim * idf;
-//                            precision_idf_sum += idf;
-//                        }
-//                        recall /= recall_idf_sum;
-//                        precision /= precision_idf_sum;
-//                    }
-//                    else {
-//                        float nodeSim = -1, simToEachTarget = -1;
-//                        long nodeBest = -1;
-//                        for (auto &tNode : targetNodes) {
-//                            auto simPair = make_pair(tNode.first, otherNodeId);
-//                            if (similarityCache.find(simPair) == similarityCache.end()) {
-//                                simToEachTarget = kb.cosineSimilarity(otherNodeId, tNode.first);
-//                                similarityCache[simPair] = simToEachTarget;
-//                            } else {
-//                                simToEachTarget = similarityCache.at(simPair);
-//                            }
-//                            if (simToEachTarget > nodeSim) {
-//                                nodeSim = simToEachTarget;
-//                                nodeBest = tNode.first;
-//                            }
-//
-//                            float documentCount = 1;
-//                            if (kb.compositeComponentCount.find(tNode.first) != kb.compositeComponentCount.end())
-//                                documentCount += kb.compositeComponentCount.at(tNode.first);
-//                            float idf = log10(float(kb.compositeNodes.size()) / documentCount);
-//
-//                            recall += simToEachTarget * idf;
-//                            recall_idf_sum += idf;
-//                        }
-//                        precision = nodeSim;
-//                        recall = recall / recall_idf_sum;
-//                    }
-//                    recall = recall > 0 ? recall : 0;
-//                    precision = precision > 0 ? precision : 0;
-//                    float simTmp = (2 * recall * precision) / (recall + precision + 1e-6);
-//                    if (simTmp < stopSearchingEdgeIfSimilarityBelow)
-//                        simTmp = 0;
-//                    sim[j] = simTmp;
-//
-
-                    float simTmp = 0, simToEachTarget = -1;
-                    long simTmpTarget = -1;
+                    float precision = 1e-4, recall = 1e-4,
+                          precision_idf_sum = 0, recall_idf_sum = 0;
                     bool isNodeComposite = kb.isNodeComposite[otherNodeId];
-                    if (not isNodeComposite) {
-                        // If node is not a composite node, find the closest target node
-                        // Minimum of cosine similarity is -1
-                        simTmp = -1;
+
+                    if (isNodeComposite) {
+                        for (auto &tNode : targetNodes) {
+                            float subNodeSim = -1, simToEachTarget = -1;
+                            long subNodeBest = -1;
+
+                            for (long subNodeId : kb.compositeNodes.at(otherNodeId)) {
+                                auto simPair = make_pair(tNode.first, subNodeId);
+                                if (similarityCache.find(simPair) == similarityCache.end()) {
+                                    simToEachTarget = kb.cosineSimilarity(subNodeId, tNode.first);
+                                    similarityCache[simPair] = simToEachTarget;
+                                } else {
+                                    simToEachTarget = similarityCache.at(simPair);
+                                }
+                                if (simToEachTarget > subNodeSim) {
+                                    subNodeSim = simToEachTarget;
+                                    subNodeBest = subNodeId;
+                                }
+                            }
+
+                            float tfidf = computeTfidf(tNode.first, targetNodes, targetMatch);
+
+                            recall += subNodeSim * tfidf;
+                            recall_idf_sum += tfidf;
+                        }
+
+                        for (long subNodeId : kb.compositeNodes.at(otherNodeId)) {
+                            float tNodeSim = -1, simToEachTarget = -1;
+                            long tNodeBest = -1;
+
+                            for (auto &tNode : targetNodes) {
+                                auto simPair = make_pair(tNode.first, subNodeId);
+                                if (similarityCache.find(simPair) == similarityCache.end()) {
+                                    simToEachTarget = kb.cosineSimilarity(subNodeId, tNode.first);
+                                    similarityCache[simPair] = simToEachTarget;
+                                } else {
+                                    simToEachTarget = similarityCache.at(simPair);
+                                }
+                                //simToEachTarget = simToEachTarget > 0.2 ? simToEachTarget : 0;
+
+                                if (simToEachTarget > tNodeSim) {
+                                    tNodeSim = simToEachTarget;
+                                    tNodeBest = tNode.first;
+                                }
+                            }
+
+                            float documentCount = 1;
+                            if (kb.compositeComponentCount.find(subNodeId) != kb.compositeComponentCount.end())
+                                documentCount += kb.compositeComponentCount.at(subNodeId);
+                            float idf = log10(float(kb.compositeNodes.size()) / documentCount);
+
+                            precision += tNodeSim * idf;
+                            precision_idf_sum += idf;
+                        }
+                        recall /= recall_idf_sum;
+                        precision /= precision_idf_sum;
+                    }
+                    else {
+                        float nodeSim = -1, simToEachTarget = -1;
+                        long nodeBest = -1;
                         for (auto &tNode : targetNodes) {
                             auto simPair = make_pair(tNode.first, otherNodeId);
                             if (similarityCache.find(simPair) == similarityCache.end()) {
@@ -1401,32 +1411,71 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
                             } else {
                                 simToEachTarget = similarityCache.at(simPair);
                             }
-                            if (simToEachTarget > simTmp) {
-                                simTmpTarget = tNode.first;
-                                simTmp = simToEachTarget;
+                            //simToEachTarget = simToEachTarget > 0.2 ? simToEachTarget : 0;
+
+                            if (simToEachTarget > nodeSim) {
+                                nodeSim = simToEachTarget;
+                                nodeBest = tNode.first;
                             }
+
+                            float tfidf = computeTfidf(tNode.first, targetNodes, targetMatch);
+
+                            recall += simToEachTarget * tfidf;
+                            recall_idf_sum += tfidf;
                         }
-                    } else {
-                        // Othewise, sum best similarity scores of component nodes of the composite node
-                        // to all target nodes, and simTmp start at 0
-                        auto &components = kb.compositeNodes.at(otherNodeId);
-                        for (auto &tNode : targetNodes) {
-                            float subNodeSim = -1;
-                            for (long subNodeId : components) {
-                                auto simPair = make_pair(tNode.first, subNodeId);
-                                if (similarityCache.find(simPair) == similarityCache.end()) {
-                                    simToEachTarget = kb.cosineSimilarity(subNodeId, tNode.first);
-                                    similarityCache[simPair] = simToEachTarget;
-                                } else {
-                                    simToEachTarget = similarityCache.at(simPair);
-                                }
-                                subNodeSim = simToEachTarget > subNodeSim ? simToEachTarget : subNodeSim;
-                            }
-                            simTmp += subNodeSim;
-                        }
-//                        for (long subNodeId : components) {
+                        precision = nodeSim;
+                        recall = recall / recall_idf_sum;
+                    }
+                    recall = recall > 0 ? recall : 0;
+                    precision = precision > 0 ? precision : 0;
+#ifdef DEBUG_DECISION
+                    cout << fmt::format("recall: {}, precision: {}", recall, precision) << endl;
+#endif
+                    float simTmp = (5 * recall * precision) / (recall + 4 * precision + 1e-6);
+                    // float simTmp = (2 * recall * precision) / (recall + precision + 1e-6);
+                    if (simTmp < stopSearchingEdgeIfSimilarityBelow)
+                        simTmp = 0;
+                    sim[j] = simTmp;
+//
+//
+//                    float simTmp = 0, simToEachTarget = -1;
+//                    long simTmpTarget = -1;
+//                    bool isNodeComposite = kb.isNodeComposite[otherNodeId];
+//                    if (not isNodeComposite) {
+//                        // If node is not a composite node, find the closest target node
+//                        // Minimum of cosine similarity is -1
+//                        simTmp = -1;
+//                        for (auto &tNode : targetNodes) {
+//                            auto simPair = make_pair(tNode.first, otherNodeId);
+//                            if (similarityCache.find(simPair) == similarityCache.end()) {
+//                                simToEachTarget = kb.cosineSimilarity(otherNodeId, tNode.first);
+//                                similarityCache[simPair] = simToEachTarget;
+//                            } else {
+//                                simToEachTarget = similarityCache.at(simPair);
+//                            }
+//
+//                            simToEachTarget *= computeTfidf(tNode.first, targetNodes, targetMatch);
+//
+//                            if (simToEachTarget > simTmp) {
+//                                simTmpTarget = tNode.first;
+//                                simTmp = simToEachTarget;
+//                            }
+//                        }
+//                    } else {
+//                        // Othewise, sum best similarity scores of component nodes of the composite node
+//                        // to all target nodes, and simTmp start at 0
+//                        auto &components = kb.compositeNodes.at(otherNodeId);
+//#ifdef DEBUG_DECISION
+//                        cout << fmt::format("Begin comparing composite node [{}:{}]",
+//                                            kb.nodes[otherNodeId], otherNodeId) << endl;
+//#endif
+//                        for (auto &tNode : targetNodes) {
 //                            float subNodeSim = -1;
-//                            for (auto &tNode : targetNodes) {
+//                            long subNodeBest = -1;
+//
+//                            float tfidf = computeTfidf(tNode.first, targetNodes, targetMatch);
+//
+//                            for (long subNodeId : components) {
 //                                auto simPair = make_pair(tNode.first, subNodeId);
 //                                if (similarityCache.find(simPair) == similarityCache.end()) {
 //                                    simToEachTarget = kb.cosineSimilarity(subNodeId, tNode.first);
@@ -1434,17 +1483,47 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
 //                                } else {
 //                                    simToEachTarget = similarityCache.at(simPair);
 //                                }
-//                                subNodeSim = simToEachTarget > subNodeSim ? simToEachTarget : subNodeSim;
+//
+//                                simToEachTarget *= tfidf;
+//
+//                                if (simToEachTarget > subNodeSim) {
+//                                    subNodeSim = simToEachTarget;
+//                                    subNodeBest = subNodeId;
+//                                }
 //                            }
+//#ifdef DEBUG_DECISION
+//                            cout << fmt::format("Target node [{}:{}] most similar to component [{}:{}], similarity {}",
+//                                                kb.nodes[tNode.first], tNode.first,
+//                                                kb.nodes[subNodeBest], subNodeBest,
+//                                                subNodeSim) << endl;
+//#endif
 //                            simTmp += subNodeSim;
 //                        }
-                    }
-
-                    // Set to 0 since discrete_distribution requires non-negative weight
-                    if (simTmp < stopSearchingEdgeIfSimilarityBelow)
-                        simTmp = 0;
-                    sim[j] = simTmp;
-                    simTarget[j] = simTmpTarget;
+//#ifdef DEBUG_DECISION
+//                        cout << fmt::format("End comparing composite node [{}:{}]",
+//                                            kb.nodes[otherNodeId], otherNodeId) << endl;
+//#endif
+////                        for (long subNodeId : components) {
+////                            float subNodeSim = -1;
+////                            for (auto &tNode : targetNodes) {
+////                                auto simPair = make_pair(tNode.first, subNodeId);
+////                                if (similarityCache.find(simPair) == similarityCache.end()) {
+////                                    simToEachTarget = kb.cosineSimilarity(subNodeId, tNode.first);
+////                                    similarityCache[simPair] = simToEachTarget;
+////                                } else {
+////                                    simToEachTarget = similarityCache.at(simPair);
+////                                }
+////                                subNodeSim = simToEachTarget > subNodeSim ? simToEachTarget : subNodeSim;
+////                            }
+////                            simTmp += subNodeSim;
+////                        }
+//                    }
+//
+//                    // Set to 0 since discrete_distribution requires non-negative weight
+//                    if (simTmp < stopSearchingEdgeIfSimilarityBelow)
+//                        simTmp = 0;
+//                    sim[j] = simTmp;
+//                    simTarget[j] = simTmpTarget;
                 }
 #ifdef DEBUG_DECISION
                 cout << fmt::format("{}: [{}:{}] --[{}:{}]--> [{}:{}], annotation [{}], "
@@ -1608,6 +1687,19 @@ string KnowledgeMatcher::edgeToStringAnnotation(size_t edgeIndex) const {
     return move(edgeAnno);
 }
 
+float KnowledgeMatcher::computeTfidf(long node,
+                                     const unordered_map<long, size_t> &nodeCount,
+                                     const unordered_map<size_t, vector<int>> &nodeMatch) const {
+    if (not isCorpusSet)
+        return 1;
+    float documentCount = 1;
+    if (documentCountOfNodeInCorpus.find(node) != documentCountOfNodeInCorpus.end())
+        documentCount += documentCountOfNodeInCorpus.at(node);
+    float idf = log(float(corpusSize) / documentCount);
+    float tf = float(nodeCount.at(node)) / float(nodeMatch.size());
+    return tf * idf;
+}
+
 void KnowledgeMatcher::matchForSourceAndTarget(const vector<int> &sourceSentence,
                                                const vector<int> &targetSentence,
                                                const vector<int> &sourceMask,
@@ -1709,7 +1801,7 @@ void KnowledgeMatcher::normalizeMatch(unordered_map<size_t, vector<int>> &match,
                 }
                 if (not allMasked) {
                     long subNodeId = kb.nodeMap.at(subSubMatch);
-                    if (kb.cosineSimilarity(subNodeId, nodeId) >= 0.5) {
+                    if (kb.cosineSimilarity(subNodeId, nodeId) > SPLIT_NODE_MINIMUM_SIMILARITY) {
                         match.emplace(subMatch.first + position, subSubMatch);
 #ifdef DEBUG
                         cout << fmt::format("Splitted node [{}:{}]", kb.nodes[subNodeId], subNodeId) << endl;

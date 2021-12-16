@@ -88,6 +88,8 @@ class OpenBookQAMatcher(BaseMatcher):
             matcher = KnowledgeMatcher(archive_path)
         super(OpenBookQAMatcher, self).__init__(tokenizer, matcher)
 
+        self.matcher.kb.disable_edges_with_weight_below(1)
+
         # Add knowledge from openbook QA as composite nodes
         self.add_openbook_qa_knowledge()
 
@@ -97,12 +99,15 @@ class OpenBookQAMatcher(BaseMatcher):
             dataset_cache_dir, "openbook_qa", "OpenBookQA-V1-Sep2018", "Data"
         )
         openbook_qa_facts_path = os.path.join(openbook_qa_path, "Main", "openbook.txt")
+        crowd_source_facts_path = os.path.join(
+            openbook_qa_path, "Additional", "crowdsourced-facts.txt"
+        )
 
         count = 0
-        for path in (openbook_qa_facts_path,):
+        for path in (openbook_qa_facts_path, crowd_source_facts_path):
             with open(path, "r") as file:
                 for line in file:
-                    line = line.strip("\n").strip(".").strip('"').strip("'")
+                    line = line.strip("\n").strip(".").strip('"').strip("'").strip(",")
                     if len(line) < 3:
                         continue
                     count += 1
