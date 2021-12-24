@@ -24,28 +24,6 @@
 #define SPLIT_NODE_MINIMUM_SIMILARITY 0.5
 using namespace std;
 
-int lcs(const vector<int> &x, const vector<int> &y) {
-    unsigned int L[x.size() + 1][y.size() + 1];
-
-    /* Following steps build L[m+1][n+1] in bottom up fashion. Note
-      that L[i][j] contains length of LCS of X[0..i-1] and Y[0..j-1] */
-    for (size_t i = 0; i <= x.size(); i++) {
-        for (size_t j = 0; j <= y.size(); j++) {
-            if (i == 0 || j == 0)
-                L[i][j] = 0;
-
-            else if (x[i - 1] == y[j - 1])
-                L[i][j] = L[i - 1][j - 1] + 1;
-
-            else
-                L[i][j] = max(L[i - 1][j], L[i][j - 1]);
-        }
-    }
-
-    /* L[m][n] contains length of LCS for X[0..n-1] and Y[0..m-1] */
-    return L[x.size()][y.size()];
-}
-
 tuple<size_t, string> scan(const string &content, const vector<string> &delims, size_t start = 0) {
     vector<size_t> positions(delims.size(), string::npos);
     size_t i = 0;
@@ -475,58 +453,6 @@ void KnowledgeBase::addCompositeEdge(long sourceNodeId, long relationId, long co
 #endif
 }
 
-pybind11::array_t<float> KnowledgeBase::getNodeEmbedding() const {
-    auto shape = nodeEmbeddingDataset->getDimensions();
-    size_t nodeNum = shape[0];
-    size_t dim = shape[1];
-    float *embedding = new float[nodeNum * dim];
-    if (nodeEmbeddingSimplifyWithInt8) {
-        const int8_t *emb = static_pointer_cast<int8_t[]>(nodeEmbeddingMem).get();
-        for(size_t i = 0; i < nodeNum; i++) {
-            auto in = xt::cast<float>(xt::adapt(emb + i * dim, dim, xt::no_ownership(),
-                                                vector<size_t>{dim})) / 64;
-            auto out = xt::adapt(embedding + i * dim, dim, xt::no_ownership(),
-                                 vector<size_t>{dim});
-            out = in;
-        }
-    } else {
-        memcpy(embedding, static_pointer_cast<float[]>(nodeEmbeddingMem).get(), sizeof(float) * nodeNum * dim);
-    }
-    // Create a Python object that will free the allocated
-    // memory when destroyed:
-    pybind11::capsule free_when_done(embedding, [](void *f) {
-        delete[] reinterpret_cast<float *>(f);
-    });
-
-    return pybind11::array_t<float>(
-            {nodeNum, dim}, // shape
-            {dim * sizeof(float), sizeof(float)}, // C-style contiguous strides for double
-            embedding, // the data pointer
-            free_when_done);
-}
-
-void KnowledgeBase::setNodeEmbedding(pybind11::array_t<float> &embedding) {
-    auto shape = nodeEmbeddingDataset->getDimensions();
-    size_t nodeNum = shape[0];
-    size_t dim = shape[1];
-    if (embedding.shape(0) != nodeNum || embedding.shape(1) != dim)
-        throw std::invalid_argument("Embedding shape doesn't match");
-    if (nodeEmbeddingSimplifyWithInt8) {
-        int8_t *emb = static_pointer_cast<int8_t[]>(nodeEmbeddingMem).get();
-        for(size_t i = 0; i < nodeNum; i++) {
-            auto in = xt::cast<int8_t>(xt::adapt(embedding.data() + i * dim, dim,
-                                                 xt::no_ownership(),
-                                                 vector<size_t>{dim}) * 64);
-            auto out = xt::adapt(emb + i * dim, dim, xt::no_ownership(),
-                                 vector<size_t>{dim});
-            out = in;
-        }
-    } else {
-        memcpy(static_pointer_cast<float[]>(nodeEmbeddingMem).get(), embedding.data(),
-               sizeof(float) * nodeNum * dim);
-    }
-}
-
 void KnowledgeBase::setNodeEmbeddingFileName(const string &path, bool loadEmbeddingToMem) {
     nodeEmbeddingFileName = path;
     loadEmbedding(loadEmbeddingToMem);
@@ -868,6 +794,9 @@ void KnowledgeBase::loadEmbedding(bool loadEmbeddingToMem) {
                     nodeEmbeddingMem = shared_ptr<float[]>(new float[shape[0] * shape[1]]);
                     nodeEmbeddingDataset->read(static_pointer_cast<float[]>(nodeEmbeddingMem).get());
                 }
+                cout << "[KB] Closing embedding file" << endl;
+                nodeEmbeddingDataset.reset();
+                nodeEmbeddingFile.reset();
             }
         }
     } else {
@@ -1194,7 +1123,7 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
                                        int maxTimes, int maxDepth, int seed,
                                        int edgeBeamWidth, bool trim,
                                        float stopSearchingEdgeIfSimilarityBelow) const {
-    if (kb.nodeEmbeddingFileName.empty() or kb.nodeEmbeddingFile == nullptr)
+    if (kb.nodeEmbeddingFileName.empty())
         throw invalid_argument("Knowledge base doesn't have an embedding file.");
 
 #ifdef DEBUG
@@ -1432,98 +1361,9 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
                     cout << fmt::format("recall: {}, precision: {}", recall, precision) << endl;
 #endif
                     float simTmp = (5 * recall * precision) / (recall + 4 * precision + 1e-6);
-                    // float simTmp = (2 * recall * precision) / (recall + precision + 1e-6);
                     if (simTmp < stopSearchingEdgeIfSimilarityBelow)
                         simTmp = 0;
                     sim[j] = simTmp;
-//
-//
-//                    float simTmp = 0, simToEachTarget = -1;
-//                    long simTmpTarget = -1;
-//                    bool isNodeComposite = kb.isNodeComposite[otherNodeId];
-//                    if (not isNodeComposite) {
-//                        // If node is not a composite node, find the closest target node
-//                        // Minimum of cosine similarity is -1
-//                        simTmp = -1;
-//                        for (auto &tNode : targetNodes) {
-//                            auto simPair = make_pair(tNode.first, otherNodeId);
-//                            if (similarityCache.find(simPair) == similarityCache.end()) {
-//                                simToEachTarget = kb.cosineSimilarity(otherNodeId, tNode.first);
-//                                similarityCache[simPair] = simToEachTarget;
-//                            } else {
-//                                simToEachTarget = similarityCache.at(simPair);
-//                            }
-//
-//                            simToEachTarget *= computeTfidf(tNode.first, targetNodes, targetMatch);
-//
-//                            if (simToEachTarget > simTmp) {
-//                                simTmpTarget = tNode.first;
-//                                simTmp = simToEachTarget;
-//                            }
-//                        }
-//                    } else {
-//                        // Othewise, sum best similarity scores of component nodes of the composite node
-//                        // to all target nodes, and simTmp start at 0
-//                        auto &components = kb.compositeNodes.at(otherNodeId);
-//#ifdef DEBUG_DECISION
-//                        cout << fmt::format("Begin comparing composite node [{}:{}]",
-//                                            kb.nodes[otherNodeId], otherNodeId) << endl;
-//#endif
-//                        for (auto &tNode : targetNodes) {
-//                            float subNodeSim = -1;
-//                            long subNodeBest = -1;
-//
-//                            float tfidf = computeTfidf(tNode.first, targetNodes, targetMatch);
-//
-//                            for (long subNodeId : components) {
-//                                auto simPair = make_pair(tNode.first, subNodeId);
-//                                if (similarityCache.find(simPair) == similarityCache.end()) {
-//                                    simToEachTarget = kb.cosineSimilarity(subNodeId, tNode.first);
-//                                    similarityCache[simPair] = simToEachTarget;
-//                                } else {
-//                                    simToEachTarget = similarityCache.at(simPair);
-//                                }
-//
-//                                simToEachTarget *= tfidf;
-//
-//                                if (simToEachTarget > subNodeSim) {
-//                                    subNodeSim = simToEachTarget;
-//                                    subNodeBest = subNodeId;
-//                                }
-//                            }
-//#ifdef DEBUG_DECISION
-//                            cout << fmt::format("Target node [{}:{}] most similar to component [{}:{}], similarity {}",
-//                                                kb.nodes[tNode.first], tNode.first,
-//                                                kb.nodes[subNodeBest], subNodeBest,
-//                                                subNodeSim) << endl;
-//#endif
-//                            simTmp += subNodeSim;
-//                        }
-//#ifdef DEBUG_DECISION
-//                        cout << fmt::format("End comparing composite node [{}:{}]",
-//                                            kb.nodes[otherNodeId], otherNodeId) << endl;
-//#endif
-////                        for (long subNodeId : components) {
-////                            float subNodeSim = -1;
-////                            for (auto &tNode : targetNodes) {
-////                                auto simPair = make_pair(tNode.first, subNodeId);
-////                                if (similarityCache.find(simPair) == similarityCache.end()) {
-////                                    simToEachTarget = kb.cosineSimilarity(subNodeId, tNode.first);
-////                                    similarityCache[simPair] = simToEachTarget;
-////                                } else {
-////                                    simToEachTarget = similarityCache.at(simPair);
-////                                }
-////                                subNodeSim = simToEachTarget > subNodeSim ? simToEachTarget : subNodeSim;
-////                            }
-////                            simTmp += subNodeSim;
-////                        }
-//                    }
-//
-//                    // Set to 0 since discrete_distribution requires non-negative weight
-//                    if (simTmp < stopSearchingEdgeIfSimilarityBelow)
-//                        simTmp = 0;
-//                    sim[j] = simTmp;
-//                    simTarget[j] = simTmpTarget;
                 }
 #ifdef DEBUG_DECISION
                 cout << fmt::format("{}: [{}:{}] --[{}:{}]--> [{}:{}], annotation [{}], "
@@ -1643,17 +1483,6 @@ vector<string> KnowledgeMatcher::matchResultPathsToStrings(const MatchResult &ma
 
 vector<int> KnowledgeMatcher::edgeToAnnotation(size_t edgeIndex) const {
     const Edge &edge = kb.edges[edgeIndex];
-//    if (kb.tokenizedEdgeAnnotations[edgeIndex].empty()) {
-//        vector<int> edgeAnno(kb.tokenizedNodes[get<0>(edge)]);
-//        auto &rel = kb.tokenizedRelationships[get<1>(edge)];
-//        edgeAnno.insert(edgeAnno.end(), rel.begin(), rel.end());
-//        auto &tar = kb.tokenizedNodes[get<2>(edge)];
-//        edgeAnno.insert(edgeAnno.end(), tar.begin(), tar.end());
-//        return move(edgeAnno);
-//    }
-//    else {
-//        return kb.tokenizedEdgeAnnotations[edgeIndex];
-//    }
     vector<int> edgeAnno(kb.tokenizedNodes[get<0>(edge)]);
     auto &rel = kb.tokenizedRelationships[get<1>(edge)];
     edgeAnno.insert(edgeAnno.end(), rel.begin(), rel.end());
@@ -1664,19 +1493,6 @@ vector<int> KnowledgeMatcher::edgeToAnnotation(size_t edgeIndex) const {
 
 string KnowledgeMatcher::edgeToStringAnnotation(size_t edgeIndex) const {
     const Edge &edge = kb.edges[edgeIndex];
-//    if (kb.tokenizedEdgeAnnotations[edgeIndex].empty()) {
-//        string edgeAnno(kb.nodes[get<0>(edge)]);
-//        edgeAnno += " ";
-//        auto &rel = kb.relationships[get<1>(edge)];
-//        edgeAnno.insert(edgeAnno.end(), rel.begin(), rel.end());
-//        edgeAnno += " ";
-//        auto &tar = kb.nodes[get<2>(edge)];
-//        edgeAnno.insert(edgeAnno.end(), tar.begin(), tar.end());
-//        return move(edgeAnno);
-//    }
-//    else {
-//        return get<4>(edge);
-//    }
     string edgeAnno(kb.nodes[get<0>(edge)]);
     edgeAnno += " ";
     auto &rel = kb.relationships[get<1>(edge)];
@@ -2043,80 +1859,4 @@ void KnowledgeMatcher::joinVisitedSubGraph(VisitedSubGraph &vsgOut, const Visite
     // Sort according round number to ensure deterministic ordering
     sort(vsgOut.visitedPaths.begin(), vsgOut.visitedPaths.end(),
          [](const VisitedPath &p1, const VisitedPath &p2){ return p1.round < p2.round; });
-}
-
-size_t KnowledgeMatcher::findPattern(const vector<int> &sentence, const vector<vector<int>> &patterns) {
-    size_t matchedPatterns = 0;
-    for (auto &pattern : patterns) {
-        size_t matched = 0;
-        for (int word : sentence) {
-            if (word != pattern[matched]) {
-                matched = 0;
-            } else {
-                matched++;
-                if (matched == pattern.size()) {
-                    matchedPatterns++;
-                    break;
-                }
-            }
-        }
-    }
-    return matchedPatterns;
-}
-
-vector<int> KnowledgeMatcher::filter(const vector<int> &sentence, const vector<vector<int>> &patterns) {
-    vector<int> lastResult = sentence, result;
-    vector<int> tmp;
-    for (auto &pattern : patterns) {
-        tmp.clear();
-        size_t matched = 0;
-        for (int word : lastResult) {
-            if (word != pattern[matched]) {
-                matched = 0;
-                if (not tmp.empty()) {
-                    result.insert(result.end(), tmp.begin(), tmp.end());
-                    tmp.clear();
-                }
-                result.push_back(word);
-            } else {
-                matched++;
-                tmp.push_back(word);
-                if (matched == pattern.size()) {
-                    matched = 0;
-                    tmp.clear();
-                }
-            }
-        }
-        if (not tmp.empty())
-            result.insert(result.end(), tmp.begin(), tmp.end());
-        lastResult.swap(result);
-        result.clear();
-    }
-    return move(lastResult);
-}
-
-vector<int> KnowledgeMatcher::mask(const vector<int> &sentence, const vector<int> &mask) {
-    vector<int> result;
-    if (mask.size() != sentence.size())
-        throw invalid_argument(fmt::format(
-                "Mask is provided for input sentence but size does not match, sentence: {}, mask: {}",
-                sentence.size(), mask.size()));
-    for (size_t i = 0; i < sentence.size(); i++) {
-        if (mask[i] != 0)
-            result.push_back(sentence[i]);
-    }
-    return result;
-}
-
-float KnowledgeMatcher::similarity(const vector<int> &source, const vector<int> &target) {
-    unordered_set<int> cmp_tar(target.begin(), target.end());
-    unordered_set<int> cmp_src(source.begin(), source.end());
-    size_t overlapCount = 0;
-    for (int word : cmp_src) {
-        if (cmp_tar.find(word) != cmp_tar.end())
-            overlapCount++;
-    }
-    return overlapCount;
-    //return float(overlapCount) / (float(source.size()) + 1);
-    //return lcs(source, target);
 }

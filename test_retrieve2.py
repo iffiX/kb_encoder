@@ -5,13 +5,13 @@ from nltk.stem import WordNetLemmatizer
 import json
 import multiprocessing
 from transformers import AutoTokenizer
-from encoder.dataset.openbook_qa import OpenBookQADataset
+from encoder.dataset.openbook_qa_with_search import OpenBookQAWithSearchDataset
 
 
 tokenizer = AutoTokenizer.from_pretrained("t5-base")
-dataset = OpenBookQADataset(
+dataset = OpenBookQAWithSearchDataset(
     tokenizer=tokenizer,
-    max_seq_length=512,
+    max_seq_length=300,
     generate_length=16,
     use_matcher=True,
     matcher_mode="embedding",
@@ -22,30 +22,29 @@ dataset = OpenBookQADataset(
         "max_edges": 3,
         "edge_beam_width": 20,
         "stop_searching_edge_if_similarity_below": 0,
-        "discard_edges_if_rank_below": 0.3,
     },
     include_option_label_in_sentence=True,
     use_option_label_as_answer_and_choices=True,
 )
 
-ranking = {}
-with open(
-    "/home/iffi/Projects/OpenBookQA/data/OpenBookQA-V1-Sep2018/"
-    "Data/Main/ranked_knowledge/openbook/full.jsonl.ranking.json",
-    "r",
-) as file:
-    for line in file:
-        object = json.loads(line)
-        ranking[object["id"]] = [x[0] for x in object["ext_fact_global_ids"]]
-
-knowledge = []
-with open(
-    "/home/iffi/Projects/OpenBookQA/data/OpenBookQA-V1-Sep2018/"
-    "Data/Main/ranked_knowledge/openbook/knowledge.json",
-    "r",
-) as file:
-    for line in file:
-        knowledge.append(json.loads(line)["SCIENCE-FACT"])
+# ranking = {}
+# with open(
+#     "/home/iffi/Projects/OpenBookQA/data/OpenBookQA-V1-Sep2018/"
+#     "Data/Main/ranked_knowledge/openbook/full.jsonl.ranking.json",
+#     "r",
+# ) as file:
+#     for line in file:
+#         object = json.loads(line)
+#         ranking[object["id"]] = [x[0] for x in object["ext_fact_global_ids"]]
+#
+# knowledge = []
+# with open(
+#     "/home/iffi/Projects/OpenBookQA/data/OpenBookQA-V1-Sep2018/"
+#     "Data/Main/ranked_knowledge/openbook/knowledge.json",
+#     "r",
+# ) as file:
+#     for line in file:
+#         knowledge.append(json.loads(line)["SCIENCE-FACT"])
 
 
 def test_train(i):
@@ -112,10 +111,11 @@ def test_test(i):
 
 
 if __name__ == "__main__":
-    dataset.validate_data[492]["fact"] = "seed"
-    result = dataset.generator(492, "validate")
-    sentence = tokenizer.decode(result["sentence"][0], skip_special_tokens=True).lower()
-    print(sentence)
+    print("finished")
+    # dataset.validate_data[400]["fact"] = ""
+    # result = dataset.generator(400, "validate")
+    # sentence = tokenizer.decode(result["sentence"][0], skip_special_tokens=True).lower()
+    # print(sentence)
     # if fact not in sentence:
     #     print(fact)
     #     print(sentence)

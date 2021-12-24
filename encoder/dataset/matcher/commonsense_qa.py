@@ -22,11 +22,6 @@ class CommonsenseQAMatcher(BaseMatcher):
     )
 
     def __init__(self, tokenizer: PreTrainedTokenizerBase):
-        nltk.download("stopwords")
-        nltk.download("punkt")
-        nltk.download("averaged_perceptron_tagger")
-        nltk.download("wordnet")
-
         assertion_path = str(
             os.path.join(dataset_cache_dir, "conceptnet-assertions.csv")
         )

@@ -96,34 +96,20 @@ class BaseMatcher:
     ) -> Dict[int, Tuple[int, List[List[int]], List[float]]]:
         return self.matcher.select_paths(match, max_edges, discard_edges_if_rank_below)
 
-    def selection_to_string(
-        self,
-        sentence: str,
-        selection: Dict[int, Tuple[int, List[List[int]], List[float]]],
-    ) -> Tuple[str, List[Tuple[str, List[str]]]]:
+    def selection_to_list_of_strings(
+        self, selection: Dict[int, Tuple[int, List[List[int]], List[float]]],
+    ) -> List[str]:
         """
-        Returns:
-            Remaining sentence piece and
-            A list of tuples of:
-                1. Sentence piece before knowledge sequences to be inserted,
-                2. List of knowledge sequences
+        Returns List of knowledge sequences
         """
-        sentence_tokens, _ = self.tokenize_and_mask(sentence)
-        sorted_selection = list(
-            (k, v) for k, (_, v, __) in selection.items()
-        )  # type: List[Tuple[int, List[str]]]
-        sorted_selection = sorted(sorted_selection, key=lambda x: x[0])
-        start = 0
-        result = []
-        for ss in sorted_selection:
-            result.append(
-                (
-                    self.tokenizer.decode(sentence_tokens[start : ss[0]]),
-                    [self.tokenizer.decode(seq) for seq in ss[1]],
-                )
-            )
-            start = ss[0]
-        return self.tokenizer.decode(sentence_tokens[start:]), result
+        knowledge_tokens = list(
+            v for _, (__, v, ___) in selection.items()
+        )  # type: List[List[List[int]]]
+        knowledge = []
+        for kt_list in knowledge_tokens:
+            for kt in kt_list:
+                knowledge.append(self.tokenizer.decode(kt))
+        return knowledge
 
     def insert_selection(
         self,

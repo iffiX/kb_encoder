@@ -76,8 +76,6 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("source_node_id"),
                  py::arg("relation_id"),
                  py::arg("composite_node_id"))
-            .def("set_node_embedding", &KnowledgeBase::setNodeEmbedding)
-            .def("get_node_embedding", &KnowledgeBase::getNodeEmbedding)
             .def("set_node_embedding_file_name", &KnowledgeBase::setNodeEmbeddingFileName,
                  py::arg("path"),
                  py::arg("load_embedding_to_mem") = true)

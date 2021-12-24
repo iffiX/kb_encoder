@@ -2,7 +2,7 @@ from encoder.trainer.openbook_qa_trainer import OpenBookQATrainer
 
 if __name__ == "__main__":
     trainer = OpenBookQATrainer.load_from_checkpoint(
-        "/home/muhan/data/workspace/kb_encoder/train_ob_qa/0/checkpoint/epoch=07-accuracy-accuracy=0.892.ckpt"
+        "/home/muhan/data/workspace/kb_encoder/train_ob_qa/0/checkpoint/epoch=05-accuracy-accuracy=0.896.ckpt"
     )
     while True:
         question = input("Q?")

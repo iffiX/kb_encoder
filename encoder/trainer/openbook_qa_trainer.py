@@ -56,7 +56,7 @@ class OpenBookQATrainer(pl.LightningModule):
             mirror=huggingface_mirror,
             return_dict=True,
         )
-        self.real_device = "cpu"
+        self.real_device = None
 
     @property
     def monitor(self):

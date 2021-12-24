@@ -4,9 +4,11 @@ import json
 import pickle
 import difflib
 import logging
+import nltk
 import numpy as np
 import torch as t
 from typing import List
+from nltk.stem import WordNetLemmatizer
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, BatchEncoding
 from encoder.dataset.matcher.openbook_qa import OpenBookQAMatcher
 from encoder.utils.settings import (
@@ -129,7 +131,7 @@ class OpenBookQADataset:
                 self.validate_data = data["validate"]
                 self.test_data = data["test"]
 
-        self.train_matching()
+        self.set_corpus()
 
     @property
     def train_dataset(self):
@@ -161,7 +163,6 @@ class OpenBookQADataset:
                     "max_times": 300,
                     "max_depth": 1,
                     "max_edges": 8,
-                    "discard_edges_if_similarity_below": 0.45,
                 }
                 match_config = {
                     k: v
@@ -173,38 +174,6 @@ class OpenBookQADataset:
                     for k, v in matcher_config.items()
                     if k in ("max_edges", "discard_edges_if_rank_below")
                 }
-                # matches = [
-                #     self.matcher.match_by_node_embedding(
-                #         data["text_question"] + " " + choice,
-                #         target_sentence=data["text_question"] + " " + choice,
-                #         seed=self.matcher_seed,
-                #         **match_config,
-                #     )
-                #     for choice in data["choices"]
-                # ]
-                # match = self.matcher.unify_match(matches)
-                # selection = self.matcher.select_paths(match, **select_config)
-                # new_question = self.matcher.insert_selection(
-                #     data["text_question"], selection, insert_at_end=True,
-                # )
-
-                # match = self.matcher.match_by_node_embedding(
-                #     data["text_choices"],
-                #     target_sentence=data["fact"] + data["text_question"],
-                #     seed=self.matcher_seed,
-                #     **match_config,
-                # )
-                # selection = self.matcher.select_paths(match, **select_config)
-                # new_choices = self.matcher.insert_selection(
-                #     data["text_choices"],
-                #     selection,
-                #     insert_at_end=self.insert_answers_at_end,
-                # )
-
-                # fact = data["fact"]
-                # fact = ""
-                import nltk
-                from nltk.stem import WordNetLemmatizer
 
                 wnl = WordNetLemmatizer()
 
@@ -220,18 +189,15 @@ class OpenBookQADataset:
                         # )
                     ):
                         allowed_tokens.append(wnl.lemmatize(token))
-                # fact = " ".join(set(allowed_tokens))
-                fact = (
+                target = (
                     " ".join(sorted(list(set(allowed_tokens))))
                     + " "
                     + data["text_question"]
                 )
-                # print(f"Guider: [{fact}]")
 
                 match = self.matcher.match_by_node_embedding(
                     data["text_question"],
-                    # target_sentence=fact + " " + data["text_question"],
-                    target_sentence=fact,
+                    target_sentence=target,
                     seed=self.matcher_seed,
                     **match_config,
                 )
@@ -240,15 +206,25 @@ class OpenBookQADataset:
                     data["text_question"], selection, insert_at_end=True,
                 )
 
+                choice_mask = "+" * len(data["text_choices"])
+                for choice in ("[A]", "[B]", "[C]", "[D]"):
+                    start_pos = data["text_choices"].find(choice)
+                    if start_pos != -1:
+                        choice_mask = (
+                            choice_mask[:start_pos]
+                            + "-" * len(choice)
+                            + choice_mask[start_pos + len(choice) :]
+                        )
+
                 match = self.matcher.match_by_node_embedding(
                     data["text_choices"],
-                    # target_sentence=fact + " " + data["text_question"],
-                    target_sentence=fact,
+                    target_sentence=target,
+                    source_mask=choice_mask,
                     seed=self.matcher_seed,
                     max_depth=1,
                     max_times=1000,
                 )
-                selection = self.matcher.select_paths(match, max_edges=6)
+                selection = self.matcher.select_paths(match, max_edges=8)
                 new_choices = self.matcher.insert_selection(
                     data["text_choices"], selection,
                 )
@@ -256,20 +232,9 @@ class OpenBookQADataset:
                     new_choices = new_choices.replace(
                         f"[ {choice} ]", f"[{choice.upper()}]"
                     )
-                # match = self.matcher.match_by_node_embedding(
-                #     data["text_question"] + " " + data["text_choices"],
-                #     target_sentence=data["text_question"],
-                #     seed=self.matcher_seed,
-                #     **match_config,
-                # )
-                # selection = self.matcher.select_paths(match, **select_config)
-                # new_sentence = self.matcher.insert_selection(
-                #     data["text_question"] + " " + data["text_choices"],
-                #     selection,
-                #     insert_at_end=True,
-                # )
             elif self.matcher_mode == "none":
                 new_question = data["text_question"]
+                new_choices = data["text_choices"]
             else:
                 raise ValueError(f"Invalid match mode {self.matcher_mode}")
 
@@ -281,29 +246,6 @@ class OpenBookQADataset:
                 truncation=True,
                 return_tensors="pt",
             )
-            # encoded_sentence = self.tokenizer(
-            #     new_question,
-            #     data["text_choices"],
-            #     padding="max_length",
-            #     max_length=self.max_seq_length,
-            #     truncation=True,
-            #     return_tensors="pt",
-            # )
-            # encoded_sentence = self.tokenizer(
-            #     data["text_question"],
-            #     new_choices,
-            #     padding="max_length",
-            #     max_length=self.max_seq_length,
-            #     truncation=True,
-            #     return_tensors="pt",
-            # )
-            # encoded_sentence = self.tokenizer(
-            #     new_sentence,
-            #     padding="max_length",
-            #     max_length=self.max_seq_length,
-            #     truncation=True,
-            #     return_tensors="pt",
-            # )
             data["org_sentence"] = data["sentence"]
             data["org_mask"] = data["mask"]
             data["sentence"] = encoded_sentence.input_ids
@@ -346,11 +288,6 @@ class OpenBookQADataset:
                 correct += 1
                 answers[batch["id"][i]] = True
             elif answer not in batch["choices"][i]:
-                print(
-                    f"sentence: [{sentence}] \n"
-                    f"wrong answer: [{answer}] \n"
-                    f"ref_answer: [{ref_answer}]"
-                )
                 if self.match_closest_when_no_equal:
                     # Gestalt Pattern Matching
                     # https://en.wikipedia.org/wiki/Gestalt_Pattern_Matching
@@ -366,12 +303,11 @@ class OpenBookQADataset:
                         answers[batch["id"][i]] = True
                 else:
                     missing += 1
-            else:
-                print(
-                    f"sentence: [{sentence}] \n"
-                    f"wrong answer: [{answer}] \n"
-                    f"ref_answer: [{ref_answer}]"
-                )
+            print(
+                f"sentence: [{sentence}] \n"
+                f"answer: [{answer}] \n"
+                f"ref_answer: [{ref_answer}]"
+            )
 
         print(f"Missing ratio {float(missing) / total}")
         if self.match_closest_when_no_equal:
@@ -421,10 +357,7 @@ class OpenBookQADataset:
                     file.write(f"{preprocessed['id']},A")
         print(f"Missing ratio {float(missing)/len(self.test_data)}")
 
-    def train_matching(self):
-        train_result_path = os.path.join(
-            preprocess_cache_dir, "openbook_qa_match_train_result.data",
-        )
+    def set_corpus(self):
         corpus = []
         for data in self.train_data:
             corpus.append(
@@ -433,101 +366,8 @@ class OpenBookQADataset:
                     add_special_tokens=False,
                 )
             )
-        # tmp = os.path.join(preprocess_cache_dir, "openbook_qa_corpus.data")
-        # if not os.path.exists(tmp):
-        #     with open("/home/iffi/Downloads/ARC_Corpus.txt", "r") as file:
-        #         for idx, line in enumerate(file):
-        #             if idx % 3 == 0:
-        #                 corpus.append(
-        #                     self.matcher.tokenizer.encode(
-        #                         line, add_special_tokens=False,
-        #                     )
-        #                 )
-        #     with open(tmp, "wb") as file:
-        #         pickle.dump(corpus, file)
-        # else:
-        #     with open(tmp, "rb") as file:
-        #         corpus = pickle.load(file)
         print("Corpus loaded, begin setting")
         self.matcher.matcher.set_corpus(corpus)
-
-        # if not os.path.exists(train_result_path):
-        #     logging.info("Training OpenBook QA Matcher")
-        #     train_info = []
-        #     for data in tqdm(self.train_data, desc="Find connection"):
-        #         source_sentence = data["text_question"]
-        #         target_sentence = data["text_question"]
-        #         source_tokens, source_mask = self.matcher.tokenize_and_mask(
-        #             source_sentence
-        #         )
-        #         target_tokens, target_mask = self.matcher.tokenize_and_mask(
-        #             target_sentence
-        #         )
-        #         match_target = self.matcher.matcher.kb.find_nodes([data["fact"]])[0]
-        #         train_info.append(
-        #             self.matcher.matcher.get_connections_for_training(
-        #                 match_target,
-        #                 source_tokens,
-        #                 target_tokens,
-        #                 source_mask,
-        #                 target_mask,
-        #             )
-        #         )
-        #     train_connections = [x for ti in train_info for x in ti.train_connections]
-        #     added_edges = [x for ti in train_info for x in ti.added_edges]
-        #     org_embedding = t.tensor(self.matcher.matcher.kb.get_node_embedding())
-        #     embedding = t.nn.Parameter(
-        #         t.tensor(
-        #             self.matcher.matcher.kb.get_node_embedding(), requires_grad=True
-        #         )
-        #     )
-        #     optimizer = t.optim.SGD([embedding], lr=1e-1)
-        #     tr = trange(200, desc="Train connection")
-        #     last_loss = 100000000
-        #     used_node_num = len(
-        #         set(
-        #             [tc[0] for tc in train_connections]
-        #             + [tc[1] for tc in train_connections]
-        #         )
-        #     )
-        #     for _ in tr:
-        #         sim_loss = (
-        #             (
-        #                 (
-        #                     embedding[[tc[0] for tc in train_connections]].detach()
-        #                     - embedding[[tc[1] for tc in train_connections]]
-        #                 )
-        #                 ** 2
-        #             )
-        #             .sum(dim=1)
-        #             .mean()
-        #         )
-        #         keep_original_loss = ((embedding - org_embedding) ** 2).sum(
-        #             dim=1
-        #         ).mean() * (embedding.shape[0] / used_node_num)
-        #         loss = keep_original_loss * 0.5 + sim_loss * 0.5
-        #         loss.backward()
-        #         optimizer.step()
-        #         tr.set_description(
-        #             f"Train connection (loss={loss:.4f}, "
-        #             f"sim_loss={sim_loss:.4f}, "
-        #             f"keep_loss={keep_original_loss:.4f})"
-        #         )
-        #         if loss > last_loss or keep_original_loss > 0.03:
-        #             break
-        #         last_loss = loss.item()
-        #     new_embedding = embedding.detach().numpy()
-        #     self.matcher.matcher.kb.set_node_embedding(new_embedding)
-        #     with open(train_result_path, "wb") as dump_file:
-        #         pickle.dump(
-        #             {"added_edges": added_edges, "embedding": new_embedding}, dump_file,
-        #         )
-        # else:
-        #     with open(train_result_path, "rb") as dump_file:
-        #         save = pickle.load(dump_file)
-        #     for add_edge in save["added_edges"]:
-        #         self.matcher.matcher.kb.add_composite_edge(*add_edge)
-        #     self.matcher.matcher.kb.set_node_embedding(save["embedding"])
 
     def parse_data(self, path):
         data = []

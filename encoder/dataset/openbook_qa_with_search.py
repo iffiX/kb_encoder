@@ -2,11 +2,15 @@ import os
 import copy
 import json
 import pickle
+import random
 import difflib
 import logging
 import nltk
 import torch as t
 from typing import List
+from multiprocessing import Pool, cpu_count
+from tqdm import tqdm
+from nltk.tokenize.treebank import TreebankWordDetokenizer
 from nltk.stem import WordNetLemmatizer
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, BatchEncoding
 from encoder.dataset.matcher.openbook_qa import OpenBookQAMatcher
@@ -21,6 +25,12 @@ from encoder.utils.file import (
 )
 from encoder.utils.inspect import save_inspect_data
 from .base import StaticIterableDataset
+
+
+def pool_initializer():
+    matcher_tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    matcher = OpenBookQAMatcher(tokenizer=matcher_tokenizer)
+    OpenBookQAWithSearchDataset.matcher = matcher
 
 
 class OpenBookQAWithSearchDataset:
@@ -38,6 +48,8 @@ class OpenBookQAWithSearchDataset:
         matcher_mode: str = "embedding",
         matcher_seed: int = -1,
         matcher_config: dict = None,
+        search_dropout_seed: int = 3208701,
+        search_dropout_rate: float = None,
         include_prefix: bool = False,
         include_option_label_in_sentence: bool = False,
         use_option_label_as_answer_and_choices: bool = False,
@@ -54,6 +66,9 @@ class OpenBookQAWithSearchDataset:
         self.matcher_mode = matcher_mode
         self.matcher_seed = matcher_seed
         self.matcher_config = matcher_config
+        self.search_dropout_seed = search_dropout_seed
+        self.search_dropout_rnd = random.Random(search_dropout_seed)
+        self.search_dropout_rate = search_dropout_rate
         self.include_prefix = include_prefix
         self.include_option_label_in_sentence = include_option_label_in_sentence
         self.insert_answers_at_end = insert_answers_at_end
@@ -101,6 +116,7 @@ class OpenBookQAWithSearchDataset:
             self.train_data = self.parse_data(train_path)
             self.validate_data = self.parse_data(validate_path)
             self.test_data = self.parse_data(test_path)
+            # self.rank_search_target_of_train()
             self.save(archive_path)
         else:
             with open_file_with_create_directories(archive_path, "rb") as file:
@@ -120,6 +136,7 @@ class OpenBookQAWithSearchDataset:
                     self.train_data = self.parse_data(train_path)
                     self.validate_data = self.parse_data(validate_path)
                     self.test_data = self.parse_data(test_path)
+                    # self.rank_search_target_of_train()
                     self.save(archive_path)
                 else:
                     raise ValueError("Configuration mismatch")
@@ -183,10 +200,9 @@ class OpenBookQAWithSearchDataset:
             data = copy.deepcopy(data)
             if self.matcher_mode == "embedding":
                 matcher_config = self.matcher_config or {
-                    "max_times": 300,
+                    "max_times": 1000,
                     "max_depth": 1,
                     "max_edges": 8,
-                    "discard_edges_if_similarity_below": 0.45,
                 }
                 match_config = {
                     k: v
@@ -230,6 +246,7 @@ class OpenBookQAWithSearchDataset:
                             + "-" * len(choice)
                             + choice_mask[start_pos + len(choice) :]
                         )
+
                 match = self.matcher.match_by_node_embedding(
                     data["text_choices"],
                     target_sentence=search_target,
@@ -278,20 +295,51 @@ class OpenBookQAWithSearchDataset:
 
         data = copy.deepcopy(data)
 
-        encoded_sentence = self.tokenizer(
+        question = (
             data["text_question"]
             if not self.include_prefix
-            else "search: " + data["text_question"],
-            data["text_choices"],
+            else "search: " + data["text_question"]
+        )
+        choices = data["text_choices"]
+
+        if self.search_dropout_rate is not None and split == "train":
+            wnl = WordNetLemmatizer()
+            detok = TreebankWordDetokenizer()
+            question_tokens = nltk.word_tokenize(question)
+            question_tokens = [
+                q_token
+                if (
+                    wnl.lemmatize(q_token.lower()) not in data["target"]
+                    or self.search_dropout_rnd.random() > self.search_dropout_rate
+                )
+                else "<unk>"
+                for q_token in question_tokens
+            ]
+            question = detok.detokenize(question_tokens)
+            choices_tokens = nltk.word_tokenize(choices)
+            choices_tokens = [
+                c_token
+                if (
+                    wnl.lemmatize(c_token.lower()) not in data["target"]
+                    or self.search_dropout_rnd.random() > self.search_dropout_rate
+                )
+                else "<unk>"
+                for c_token in choices_tokens
+            ]
+            choices = detok.detokenize(choices_tokens)
+
+        encoded_sentence = self.tokenizer(
+            question,
+            choices,
             padding="max_length",
-            max_length=self.max_seq_length,
+            max_length=256,
             truncation=True,
             return_tensors="pt",
         )
         answer = self.tokenizer.encode(
             " ".join(data["target"]),
             padding="max_length",
-            max_length=self.generate_length,
+            max_length=32,
             truncation=True,
             return_tensors="pt",
         )
@@ -327,11 +375,6 @@ class OpenBookQAWithSearchDataset:
                 correct += 1
                 is_answer_correct[batch["id"][i]] = True
             elif answer not in batch["choices"][i]:
-                print(
-                    f"sentence: [{sentence}] \n"
-                    f"wrong answer: [{answer}] \n"
-                    f"ref_answer: [{ref_answer}]"
-                )
                 if self.match_closest_when_no_equal:
                     # Gestalt Pattern Matching
                     # https://en.wikipedia.org/wiki/Gestalt_Pattern_Matching
@@ -347,13 +390,12 @@ class OpenBookQAWithSearchDataset:
                         is_answer_correct[batch["id"][i]] = True
                 else:
                     missing += 1
-            else:
-                print(
-                    f"sentence: [{sentence}] \n"
-                    f"wrong answer: [{answer}] \n"
-                    f"ref_answer: [{ref_answer}]"
-                )
 
+            print(
+                f"sentence: [{sentence}] \n"
+                f"answer: [{answer}] \n"
+                f"ref_answer: [{ref_answer}]"
+            )
         print(f"Missing ratio {float(missing) / total}")
         if self.match_closest_when_no_equal:
             print(f"Approximately correct ratio {float(approximately_correct) / total}")
@@ -374,8 +416,12 @@ class OpenBookQAWithSearchDataset:
                 ref_answer_tensor, skip_special_tokens=True
             )
             sentence = self.tokenizer.decode(
-                batch["sentence"][i], skip_special_tokens=True
+                batch["sentence"][i],
+                skip_special_tokens=self.search_dropout_rate is None,
             )
+
+            if self.search_dropout_rate is not None:
+                sentence = sentence.strip("<pad>")
 
             keywords = set(nltk.word_tokenize(answer.lower()))
             ref_keywords = set(nltk.word_tokenize(ref_answer.lower()))
@@ -451,7 +497,110 @@ class OpenBookQAWithSearchDataset:
                     add_special_tokens=False,
                 )
             )
+        print("Corpus loaded, begin setting")
         self.matcher.matcher.set_corpus(corpus)
+
+    def rank_search_target_of_train(self):
+        print("Ranking target words of training set")
+        for data in self.train_data:
+            source = data["text_question"] + " " + data["text_choices"]
+            wnl = WordNetLemmatizer()
+            tokens = [wnl.lemmatize(t).lower() for t in nltk.word_tokenize(source)]
+            new_target = []
+            for keyphrase in data["target"]:
+                keyphrase = keyphrase.lower()
+                index = tokens.index(keyphrase) if keyphrase in tokens else 1000000
+                new_target.append((keyphrase, index))
+            data["target"] = [x[0] for x in sorted(new_target, key=lambda x: x[1])]
+        # with Pool(initializer=pool_initializer, processes=cpu_count() - 1) as p:
+        #     simplified_train_data = [
+        #         {
+        #             "target": d["target"],
+        #             "text_question": d["text_question"],
+        #             "text_choices": d["text_choices"],
+        #         }
+        #         for d in self.train_data
+        #     ]
+        #     new_targets = list(
+        #         tqdm(
+        #             p.imap(
+        #                 self.get_ranked_search_target_of_train, simplified_train_data
+        #             ),
+        #             total=len(simplified_train_data),
+        #         )
+        #     )
+        #     for data, new_target in zip(self.train_data, new_targets):
+        #         data["target"] = new_target
+
+    @classmethod
+    def get_ranked_search_target_of_train(cls, data):
+        target = data["target"].copy()
+        new_target = []
+        base_knowledge = cls.get_selected_knowledge(data, data["target"])
+        # Only rank top 2
+        while target and len(new_target) < 2:
+            knowledge_list = [
+                cls.get_selected_knowledge(data, new_target + [t]) for t in target
+            ]
+            score_list = [
+                cls.knowledge_score(base_knowledge, kn) for kn in knowledge_list
+            ]
+            most_important_target = max(
+                [(t, sc) for t, sc in zip(target, score_list)], key=lambda x: x[1],
+            )[0]
+            new_target.append(most_important_target)
+            target.pop(target.index(most_important_target))
+        new_target += target
+        return new_target
+
+    @classmethod
+    def get_selected_knowledge(cls, data, target):
+        search_target = " ".join(target) + " " + data["text_question"]
+        knowledge = []
+        match = cls.matcher.match_by_node_embedding(
+            data["text_question"],
+            target_sentence=search_target,
+            seed=1394823,
+            max_times=1000,
+            max_depth=3,
+        )
+        selection = cls.matcher.select_paths(match, max_edges=3)
+        knowledge += cls.matcher.selection_to_list_of_strings(selection)
+
+        choice_mask = "+" * len(data["text_choices"])
+        for choice in ("[A]", "[B]", "[C]", "[D]"):
+            start_pos = data["text_choices"].find(choice)
+            if start_pos != -1:
+                choice_mask = (
+                    choice_mask[:start_pos]
+                    + "-" * len(choice)
+                    + choice_mask[start_pos + len(choice) :]
+                )
+        match = cls.matcher.match_by_node_embedding(
+            data["text_choices"],
+            target_sentence=search_target,
+            source_mask=choice_mask,
+            seed=1394823,
+            max_depth=2,
+            max_times=1000,
+        )
+        selection = cls.matcher.select_paths(match, max_edges=8)
+        knowledge += cls.matcher.selection_to_list_of_strings(selection)
+        return knowledge
+
+    @staticmethod
+    def knowledge_score(ref_knowledge: List[str], knowledge: List[str]):
+        knowledge = set(knowledge)
+        ref_knowledge = set(ref_knowledge)
+        intersection = ref_knowledge.intersection(knowledge)
+
+        if len(ref_knowledge) == 0:
+            f1 = 1
+        else:
+            precision = len(intersection) / (len(knowledge) + 1e-6)
+            recall = len(intersection) / (len(ref_knowledge) + 1e-6)
+            f1 = (2 * precision * recall) / (precision + recall + 1e-6)
+        return f1
 
     def parse_data(self, path):
         data = []

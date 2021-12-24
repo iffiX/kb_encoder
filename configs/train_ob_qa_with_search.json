@@ -10,7 +10,7 @@
             "l2_regularization": 0,
             "learning_rate": 1e-4,
             "load": false,
-            "max_seq_length": 256,
+            "max_seq_length": 300,
             "qa_checkpoint_path": "/home/muhan/data/workspace/kb_encoder/train_ob_qa/0/checkpoint/epoch=07-accuracy-accuracy=0.892.ckpt",
             "generate_length": 32,
             "optimizer_class": "Adafactor",

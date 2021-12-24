@@ -60,7 +60,7 @@ class OpenBookQAWithSearchTrainer(pl.LightningModule):
         self.qa_model = OpenBookQATrainer.load_from_checkpoint(
             config.qa_checkpoint_path
         ).model
-        self.real_device = "cpu"
+        self.real_device = None
 
     @property
     def monitor(self):
@@ -119,7 +119,8 @@ class OpenBookQAWithSearchTrainer(pl.LightningModule):
         )
         return [search_loader, qa_loader]
 
-    def on_fit_start(self):
+    def setup(self, stage=None):
+        print("Updating qa checkpoint")
         if self.config.device_map is not None:
             if self.is_distributed:
                 raise ValueError(

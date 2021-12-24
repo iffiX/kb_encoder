@@ -33,7 +33,10 @@ def find_checkpoint(
         for file in os.listdir(checkpoint_path):
             if file.endswith(".ckpt"):
                 available_files.append(file)
-        sorted_by_time = sorted(available_files, key=lambda f: os.stat(f).st_mtime)
+        sorted_by_time = sorted(
+            available_files,
+            key=lambda f: os.stat(os.path.join(checkpoint_path, f)).st_mtime,
+        )
         if len(sorted_by_time) == 0:
             return None
         checkpoint = sorted_by_time[-1]
@@ -73,7 +76,9 @@ def stage_name_to_trainer(
 
 def stage_name_to_checkpoint(stage: str, checkpoint_path: str):
     if stage in stage_name_to_trainer_map:
-        return stage_name_to_trainer_map[stage].load_from_checkpoint(checkpoint_path)
+        return stage_name_to_trainer_map[stage].load_from_checkpoint(
+            checkpoint_path, map_location="cpu"
+        )
     else:
         raise ValueError(f"Unknown stage {stage}.")
 
@@ -146,7 +151,7 @@ def _train(
     trainer.fit(stage_trainer)
 
 
-def train(config: Config, stage_index: int, only_test: bool = False):
+def run(config: Config, stage_index: int, mode: str = "train"):
     # t.multiprocessing.set_start_method("spawn", force=True)
     # execute stages
     stage = config.stages[stage_index]
@@ -167,7 +172,7 @@ def train(config: Config, stage_index: int, only_test: bool = False):
         config.working_directory, str(stage_index), "result"
     )
 
-    if not only_test:
+    if mode == "train":
         stage_trainer = stage_name_to_trainer(
             stage, stage_config, stage_result_path, is_distributed
         )
@@ -181,12 +186,12 @@ def train(config: Config, stage_index: int, only_test: bool = False):
             checkpoint_path=checkpoint_path,
             log_path=log_path,
         )
-    else:
-        logging.info("Testing.")
+    elif mode in ("validate", "test"):
+        logging.info("Validating." if mode == "validate" else "Testing")
 
         checkpoint = find_checkpoint(checkpoint_path)
         if checkpoint is None:
-            raise RuntimeError("Cannot find a valid checkpoint for testing.")
+            raise RuntimeError("Cannot find a valid checkpoint.")
         else:
             logging.info(f"Using checkpoint {checkpoint}")
 
@@ -197,9 +202,18 @@ def train(config: Config, stage_index: int, only_test: bool = False):
         stage_trainer = stage_name_to_checkpoint(stage, checkpoint)
 
         trainer = pl.Trainer(
-            gpus=config.gpus,
-            accelerator="ddp" if len(config.gpus) > 1 else None,
-            plugins=[DDPPlugin(find_unused_parameters=True)],
+            gpus=str(config.gpus[0])
+            if isinstance(config.gpus, list) and len(config.gpus) == 1
+            else config.gpus,
+            accelerator="ddp" if is_distributed else None,
+            plugins=[DDPPlugin(find_unused_parameters=True)]
+            if is_distributed
+            else None,
             deterministic=True,
         )
-        trainer.test(stage_trainer)
+        if mode == "validate":
+            trainer.validate(stage_trainer)
+        else:
+            trainer.test(stage_trainer)
+    else:
+        raise ValueError(f"Unknown mode {mode}")

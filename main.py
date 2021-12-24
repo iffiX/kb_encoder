@@ -4,9 +4,8 @@ import sys
 import logging
 import argparse
 import subprocess
-from pprint import pprint
 from multiprocessing import get_context
-from encoder.trainer.train import train
+from encoder.trainer.train import run
 from encoder.utils.config import *
 
 logging.root.setLevel(logging.INFO)
@@ -17,6 +16,8 @@ if __name__ == "__main__":
 
     p_train = subparsers.add_parser("train", help="Start training.")
 
+    p_validate = subparsers.add_parser("validate", help="Start validating.")
+
     p_test = subparsers.add_parser("test", help="Start testing.")
 
     p_train.add_argument(
@@ -24,6 +25,14 @@ if __name__ == "__main__":
     )
 
     p_train.add_argument(
+        "--stage", type=int, default=None, help="Stage number to run.",
+    )
+
+    p_validate.add_argument(
+        "--config", type=str, required=True, help="Path of the config file.",
+    )
+
+    p_validate.add_argument(
         "--stage", type=int, default=None, help="Stage number to run.",
     )
 
@@ -56,7 +65,7 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    if args.command == "train" or args.command == "test":
+    if args.command in ("train", "validate", "test"):
         ctx = get_context("spawn")
         config = load_config(args.config)
         assert len(config.stages) == len(
@@ -89,7 +98,7 @@ if __name__ == "__main__":
             assert (
                 0 <= args.stage < len(config.stages)
             ), f"Stage number {args.stage} out of range."
-            train(config, args.stage, only_test=args.command == "test")
+            run(config, args.stage, mode=args.command)
 
     elif args.command == "generate":
         generate_config(args.stages.split(","), args.output, args.print)

@@ -103,17 +103,6 @@ public:
         cista::raw::string nodeEmbeddingFileName;
     };
 
-    struct ModificationArchive {
-        cista::raw::hash_map<long, cista::raw::vector<size_t>> edgeToTarget;
-        cista::raw::hash_map<long, cista::raw::vector<size_t>> edgeFromSource;
-        cista::raw::vector<SerializableEdge> newEdges;
-        cista::raw::vector<cista::raw::string> relationships;
-        cista::raw::vector<cista::raw::vector<int>> tokenizedNodes;
-        cista::raw::vector<cista::raw::vector<int>> tokenizedRelationships;
-        cista::raw::vector<cista::raw::vector<int>> tokenizedEdgeAnnotations;
-        cista::raw::vector<float> nodeEmbedding;
-    };
-
     struct VectorHash {
         std::size_t operator()(std::vector<int> const &vec) const;
     };
@@ -178,10 +167,6 @@ public:
                           const std::vector<int> &mask = {});
 
     void addCompositeEdge(long sourceNodeId, long relationId, long compositeNodeId);
-
-    pybind11::array_t<float> getNodeEmbedding() const;
-
-    void setNodeEmbedding(pybind11::array_t<float> &embedding);
 
     void setNodeEmbeddingFileName(const std::string &path, bool loadEmbeddingToMem = true);
 
@@ -355,15 +340,6 @@ private:
     static void keepTopK(std::vector<float> &weights, int k = -1);
 
     static void joinVisitedSubGraph(VisitedSubGraph &vsgOut, const VisitedSubGraph &vsgIn);
-
-    static size_t findPattern(const std::vector<int> &sentence, const std::vector<std::vector<int>> &patterns);
-
-    static std::vector<int> filter(const std::vector<int> &sentence, const std::vector<std::vector<int>> &patterns);
-
-    static std::vector<int> mask(const std::vector<int> &sentence, const std::vector<int> &mask);
-
-    static float similarity(const std::vector<int> &source, const std::vector<int> &target);
-
 };
 
 #endif //MATCHER_H
