@@ -82,8 +82,25 @@ class OpenBookQAWithSearchTrainer(pl.LightningModule):
         return search_loader
 
     def val_dataloader(self):
+        # qa_loader = DataLoader(
+        #     dataset=self.dataset.validate_qa_dataset,
+        #     num_workers=self.config.load_worker_num,
+        #     prefetch_factor=self.config.load_prefetch_per_worker,
+        #     batch_size=self.config.batch_size,
+        #     collate_fn=collate_function_dict_to_batch_encoding,
+        #     worker_init_fn=set_worker_sharing_strategy,
+        # )
+        # search_loader = DataLoader(
+        #     dataset=self.dataset.validate_search_dataset,
+        #     num_workers=self.config.load_worker_num,
+        #     prefetch_factor=self.config.load_prefetch_per_worker,
+        #     batch_size=self.config.batch_size,
+        #     collate_fn=collate_function_dict_to_batch_encoding,
+        #     worker_init_fn=set_worker_sharing_strategy,
+        # )
+        # return [search_loader, qa_loader]
         qa_loader = DataLoader(
-            dataset=self.dataset.validate_qa_dataset,
+            dataset=self.dataset.test_qa_dataset,
             num_workers=self.config.load_worker_num,
             prefetch_factor=self.config.load_prefetch_per_worker,
             batch_size=self.config.batch_size,
@@ -91,7 +108,7 @@ class OpenBookQAWithSearchTrainer(pl.LightningModule):
             worker_init_fn=set_worker_sharing_strategy,
         )
         search_loader = DataLoader(
-            dataset=self.dataset.validate_search_dataset,
+            dataset=self.dataset.test_search_dataset,
             num_workers=self.config.load_worker_num,
             prefetch_factor=self.config.load_prefetch_per_worker,
             batch_size=self.config.batch_size,
@@ -170,7 +187,8 @@ class OpenBookQAWithSearchTrainer(pl.LightningModule):
         batch = batch.to("cpu")
         if dataloader_idx == 0:
             for res, id in zip(result, batch["id"]):
-                self.dataset.set_search_target(res, "validate", id)
+                # self.dataset.set_search_target(res, "validate", id)
+                self.dataset.set_search_target(res, "test", id)
         return {
             "batch": batch,
             "tokens": result,
@@ -190,7 +208,8 @@ class OpenBookQAWithSearchTrainer(pl.LightningModule):
         search_batch, search_tokens = collate_and_filter_outputs(outputs[0])
         search_metrics = self.dataset.validate_search(search_batch, search_tokens)
         qa_batch, qa_tokens = collate_and_filter_outputs(outputs[1])
-        qa_metrics = self.dataset.validate_qa(qa_batch, qa_tokens)
+        # qa_metrics = self.dataset.validate_qa(qa_batch, qa_tokens)
+        qa_metrics = self.dataset.test_qa(qa_batch, qa_tokens)
 
         for key, value in search_metrics.items():
             self.log("search_" + key, value, prog_bar=True, sync_dist=True)
@@ -202,6 +221,52 @@ class OpenBookQAWithSearchTrainer(pl.LightningModule):
                 print(f"search_{key}: {value}")
             for key, value in qa_metrics.items():
                 print(f"qa_{key}: {value}")
+
+    def test_step(self, batch: BatchEncoding, _batch_idx, dataloader_idx):
+        if dataloader_idx == 0:
+            out = self.model.generate(
+                batch["sentence"].to(self.real_device or self.device),
+                max_length=self.config.generate_length,
+                attention_mask=batch["mask"].to(self.real_device or self.device),
+                early_stopping=True,
+                num_beams=5,
+            )
+        else:
+            out = self.qa_model.generate(
+                batch["sentence"].to(self.real_device or self.device),
+                max_length=self.config.generate_length,
+                attention_mask=batch["mask"].to(self.real_device or self.device),
+                early_stopping=True,
+            )
+        result = t.full(
+            [out.shape[0], self.config.generate_length], self.tokenizer.pad_token_id
+        )
+        result[:, : out.shape[1]] = out.cpu()
+        batch = batch.to("cpu")
+        if dataloader_idx == 0:
+            for res, id in zip(result, batch["id"]):
+                self.dataset.set_search_target(res, "test", id)
+        return {
+            "batch": batch,
+            "tokens": result,
+        }
+
+    def test_epoch_end(self, outputs):
+        if self.is_distributed:
+            t.cuda.set_device(self.real_device or self.device)
+            gathered_outputs = [None] * get_world_size()
+            all_gather_object(gathered_outputs, outputs)
+            gathered_outputs = list(itertools.chain.from_iterable(gathered_outputs))
+            self.test_on_main_process(gathered_outputs)
+        else:
+            self.test_on_main_process(outputs)
+
+    @rank_zero_only
+    def test_on_main_process(self, outputs):
+        qa_batch, qa_tokens = collate_and_filter_outputs(outputs[1])
+        result = self.dataset.test_qa(qa_batch, qa_tokens)
+        print(f"Test accuracy: {result['accuracy']}")
+        self.dataset.generate_test_results(qa_tokens, self.stage_result_path)
 
     def configure_optimizers(self):
         if self.config.optimizer_class == "Adafactor":
@@ -218,16 +283,3 @@ class OpenBookQAWithSearchTrainer(pl.LightningModule):
                 weight_decay=self.config.l2_regularization,
             )
         return optim
-        # sch = t.optim.lr_scheduler.ReduceLROnPlateau(
-        #     optim, mode="max", factor=0.3, patience=0, min_lr=3e-5, verbose=True
-        # )
-        # return (
-        #     [optim],
-        #     [
-        #         {
-        #             # REQUIRED: The scheduler instance
-        #             "scheduler": sch,
-        #             "monitor": "qa_accuracy",
-        #         }
-        #     ],
-        # )

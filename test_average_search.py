@@ -20,7 +20,7 @@ dataset = OpenBookQADataset(
         "max_times": 1000,
         "max_depth": 3,
         "max_edges": 3,
-        "edge_beam_width": 20,
+        "edge_top_k": 20,
         "stop_searching_edge_if_similarity_below": 0,
         "discard_edges_if_rank_below": 0,
     },

@@ -236,6 +236,8 @@ public:
     struct VisitedPath {
         int round;
         long root;
+        size_t rootStartPos;
+        size_t rootEndPos;
         int matchedFocusCount;
         std::vector<size_t> edges;
         std::unordered_map<size_t, float> similarities;
@@ -252,16 +254,13 @@ public:
         std::unordered_set<long> coveredCompositeNodes;
         std::unordered_set<std::pair<long, long>, PairHash> coveredNodePairs;
         std::unordered_map<std::pair<long, long>, float, PairHash> sourceToTargetSimilarity;
-        std::unordered_map<long, std::vector<size_t>> coveredSubGraph;
+        // (source node start pos, source node end pos), edges
+        std::unordered_map<std::pair<size_t, size_t>, std::vector<size_t>, PairHash> coveredSubGraph;
     };
 
     struct MatchResult {
         VisitedSubGraph visitedSubGraph;
-
-        // first: matched node id, match start position in sentence, match end position in sentence
-        // also only store the first posision reference if there are multiple occurrences to prevent
-        // duplicate knowledge.
-        std::unordered_map<long, std::pair<size_t, size_t>> nodeToTokenPosition;
+        size_t targetNodeNum;
     };
 
     typedef std::unordered_map<size_t, std::tuple<size_t, std::vector<std::vector<int>>, std::vector<float>>> SelectResult;
@@ -284,16 +283,11 @@ public:
 
     void setCorpus(const std::vector<std::vector<int>> &corpus);
 
-    TrainInfo
-    getConnectionsForTraining(long matchCompositeTarget,
-                              const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
-                              const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {});
-
     MatchResult
     matchByNodeEmbedding(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
                          const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
                          int maxTimes = 100, int maxDepth = 3, int seed = -1,
-                         int edgeBeamWidth = -1, bool trimPath = true,
+                         int edgeTopK = -1, int sourceContextRange = 0, bool trimPath = true,
                          float stopSearchingEdgeIfSimilarityBelow = 0) const;
 
     std::vector<std::string> matchResultPathsToStrings(const MatchResult &matchResult) const;

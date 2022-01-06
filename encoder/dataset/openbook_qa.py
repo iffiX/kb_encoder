@@ -5,7 +5,6 @@ import pickle
 import difflib
 import logging
 import nltk
-import numpy as np
 import torch as t
 from typing import List
 from nltk.stem import WordNetLemmatizer
@@ -33,8 +32,8 @@ class OpenBookQADataset:
     def __init__(
         self,
         tokenizer: PreTrainedTokenizerBase,
-        max_seq_length: int = 128,
-        generate_length: int = 16,
+        max_seq_length: int = 300,
+        generate_length: int = 32,
         use_matcher: bool = False,
         matcher_mode: str = "embedding",
         matcher_seed: int = -1,
@@ -159,35 +158,12 @@ class OpenBookQADataset:
             # data to gpu by moving
             data = copy.deepcopy(data)
             if self.matcher_mode == "embedding":
-                matcher_config = self.matcher_config or {
-                    "max_times": 300,
-                    "max_depth": 1,
-                    "max_edges": 8,
-                }
-                match_config = {
-                    k: v
-                    for k, v in matcher_config.items()
-                    if k not in ("max_edges", "discard_edges_if_rank_below")
-                }
-                select_config = {
-                    k: v
-                    for k, v in matcher_config.items()
-                    if k in ("max_edges", "discard_edges_if_rank_below")
-                }
-
                 wnl = WordNetLemmatizer()
 
                 tokens = nltk.word_tokenize(data["fact"])
                 allowed_tokens = []
                 for token, pos in nltk.pos_tag(tokens):
-                    if (
-                        pos.startswith("NN")
-                        # or pos.startswith("JJ")
-                        # or (
-                        #     pos.startswith("VB")
-                        #     and token not in self.matcher.VERB_FILTER_SET
-                        # )
-                    ):
+                    if pos.startswith("NN"):
                         allowed_tokens.append(wnl.lemmatize(token))
                 target = (
                     " ".join(sorted(list(set(allowed_tokens))))
@@ -199,12 +175,26 @@ class OpenBookQADataset:
                     data["text_question"],
                     target_sentence=target,
                     seed=self.matcher_seed,
-                    **match_config,
+                    max_times=self.matcher_config["question_match_max_times"],
+                    max_depth=self.matcher_config["question_match_max_depth"],
+                    edge_top_k=self.matcher_config["question_match_edge_top_k"],
+                    source_context_range=self.matcher_config[
+                        "question_match_source_context_range"
+                    ],
                 )
-                selection = self.matcher.select_paths(match, **select_config)
+                selection = self.matcher.select_paths(
+                    match,
+                    max_edges=self.matcher_config["question_select_max_edges"],
+                    discard_edges_if_rank_below=self.matcher_config[
+                        "question_select_discard_edges_if_rank_below"
+                    ],
+                )
+
                 new_question = self.matcher.insert_selection(
                     data["text_question"], selection, insert_at_end=True,
                 )
+
+                # new_question = data["text_question"] + f" ({data['fact']}) "
 
                 choice_mask = "+" * len(data["text_choices"])
                 for choice in ("[A]", "[B]", "[C]", "[D]"):
@@ -221,10 +211,21 @@ class OpenBookQADataset:
                     target_sentence=target,
                     source_mask=choice_mask,
                     seed=self.matcher_seed,
-                    max_depth=1,
-                    max_times=1000,
+                    max_times=self.matcher_config["choices_match_max_times"],
+                    max_depth=self.matcher_config["choices_match_max_depth"],
+                    edge_top_k=self.matcher_config["choices_match_edge_top_k"],
+                    source_context_range=self.matcher_config[
+                        "choices_match_source_context_range"
+                    ],
                 )
-                selection = self.matcher.select_paths(match, max_edges=8)
+                selection = self.matcher.select_paths(
+                    match,
+                    max_edges=self.matcher_config["choices_select_max_edges"],
+                    discard_edges_if_rank_below=self.matcher_config[
+                        "choices_select_discard_edges_if_rank_below"
+                    ],
+                )
+
                 new_choices = self.matcher.insert_selection(
                     data["text_choices"], selection,
                 )
@@ -253,19 +254,7 @@ class OpenBookQADataset:
 
         return data
 
-    def validate_logits(self, batch: BatchEncoding, logits: t.Tensor):
-        """
-        For use with a classifier model
-        """
-        logits = logits.cpu().numpy()
-        labels = np.argmax(logits, axis=1)
-        ref_labels = batch["label"].cpu().numpy()
-        return {"accuracy": float(np.sum(labels == ref_labels)) / labels.shape[0]}
-
-    def validate_tokens(self, batch: BatchEncoding, tokens: t.Tensor):
-        """
-        For use with a classifier model
-        """
+    def validate(self, batch: BatchEncoding, tokens: t.Tensor):
         total = tokens.shape[0]
         correct = 0
         approximately_correct = 0
@@ -316,22 +305,7 @@ class OpenBookQADataset:
         save_inspect_data(answers, "openbook_qa_val_answers")
         return {"accuracy": float(correct) / total}
 
-    def generate_test_results_logits(self, logits: t.Tensor, directory: str):
-        logits = logits.cpu().numpy()
-        labels = np.argmax(logits, axis=1).tolist()
-        with open_file_with_create_directories(
-            os.path.join(directory, "openbook_qa.csv"), "w"
-        ) as file:
-            if len(labels) != len(self.test_data):
-                raise ValueError(
-                    f"Label size {len(labels)} does not match "
-                    f"test size {len(self.test_data)}"
-                )
-            answer_keys = ["A", "B", "C", "D"]
-            for label, preprocessed in zip(labels, self.test_data):
-                file.write(f"{preprocessed['id']},{answer_keys[label]}")
-
-    def generate_test_results_tokens(self, tokens: t.Tensor, directory: str):
+    def generate_test_results(self, tokens: t.Tensor, directory: str):
         missing = 0
         with open_file_with_create_directories(
             os.path.join(directory, "openbook_qa.csv"), "w"
@@ -346,7 +320,7 @@ class OpenBookQADataset:
                 answer = self.tokenizer.decode(answer_tokens, skip_special_tokens=True)
                 for i, choice in enumerate(preprocessed["choices"]):
                     if answer == choice:
-                        file.write(f"{preprocessed['id']},{answer_keys[i]}")
+                        file.write(f"{preprocessed['id']},{answer_keys[i]}\n")
                         break
                 else:
                     missing += 1
@@ -355,7 +329,7 @@ class OpenBookQADataset:
                         f"answer: {answer}, using default A as answer."
                     )
                     file.write(f"{preprocessed['id']},A")
-        print(f"Missing ratio {float(missing)/len(self.test_data)}")
+        print(f"Missing ratio {float(missing) / len(self.test_data)}")
 
     def set_corpus(self):
         corpus = []

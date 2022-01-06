@@ -1,7 +1,7 @@
 import os
 import nltk
 import logging
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Union
 from transformers import PreTrainedTokenizerBase
 from encoder.dataset.matcher import KnowledgeMatcher
 from encoder.utils.settings import preprocess_cache_dir
@@ -53,7 +53,8 @@ class BaseMatcher:
         max_times: int = 1000,
         max_depth: int = 3,
         seed: int = -1,
-        edge_beam_width: int = -1,
+        edge_top_k: int = -1,
+        source_context_range: int = 0,
         trim_path: bool = True,
         stop_searching_edge_if_similarity_below: float = 0,
     ):
@@ -79,7 +80,8 @@ class BaseMatcher:
             max_times=max_times,
             max_depth=max_depth,
             seed=seed,
-            edge_beam_width=edge_beam_width,
+            edge_top_k=edge_top_k,
+            source_context_range=source_context_range,
             trim_path=trim_path,
             stop_searching_edge_if_similarity_below=stop_searching_edge_if_similarity_below,
         )
@@ -92,8 +94,17 @@ class BaseMatcher:
         return self.matcher.join_match_results(matches)
 
     def select_paths(
-        self, match, max_edges: int = 10, discard_edges_if_rank_below: float = 0
+        self,
+        match,
+        max_edges: int = 10,
+        discard_edges_if_rank_below: Union[float, str] = 0,
     ) -> Dict[int, Tuple[int, List[List[int]], List[float]]]:
+        if isinstance(discard_edges_if_rank_below, str):
+            if discard_edges_if_rank_below != "auto":
+                raise ValueError(
+                    "discard_edges_if_rank_below can only be set to float or 'auto'"
+                )
+            discard_edges_if_rank_below = max(-match.target_node_num / 40 + 0.475, 0.2)
         return self.matcher.select_paths(match, max_edges, discard_edges_if_rank_below)
 
     def selection_to_list_of_strings(

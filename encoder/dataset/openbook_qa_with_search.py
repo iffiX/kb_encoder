@@ -48,8 +48,6 @@ class OpenBookQAWithSearchDataset:
         matcher_mode: str = "embedding",
         matcher_seed: int = -1,
         matcher_config: dict = None,
-        search_dropout_seed: int = 3208701,
-        search_dropout_rate: float = None,
         include_prefix: bool = False,
         include_option_label_in_sentence: bool = False,
         use_option_label_as_answer_and_choices: bool = False,
@@ -66,9 +64,6 @@ class OpenBookQAWithSearchDataset:
         self.matcher_mode = matcher_mode
         self.matcher_seed = matcher_seed
         self.matcher_config = matcher_config
-        self.search_dropout_seed = search_dropout_seed
-        self.search_dropout_rnd = random.Random(search_dropout_seed)
-        self.search_dropout_rate = search_dropout_rate
         self.include_prefix = include_prefix
         self.include_option_label_in_sentence = include_option_label_in_sentence
         self.insert_answers_at_end = insert_answers_at_end
@@ -157,7 +152,7 @@ class OpenBookQAWithSearchDataset:
     @property
     def validate_qa_dataset(self):
         return StaticIterableDataset(
-            len(self.validate_data), self.qa_generator, ("validate",)
+            len(self.validate_data) * 2, self.qa_generator, ("validate",)
         )
 
     @property
@@ -187,7 +182,7 @@ class OpenBookQAWithSearchDataset:
             data = self.train_data[index]
             search_targets = {}
         elif split == "validate":
-            data = self.validate_data[index]
+            data = self.validate_data[index % len(self.validate_data)]
             search_targets = self.validate_search_targets
         elif split == "test":
             data = self.test_data[index]
@@ -199,40 +194,28 @@ class OpenBookQAWithSearchDataset:
             # data to gpu by moving
             data = copy.deepcopy(data)
             if self.matcher_mode == "embedding":
-                matcher_config = self.matcher_config or {
-                    "max_times": 1000,
-                    "max_depth": 1,
-                    "max_edges": 8,
-                }
-                match_config = {
-                    k: v
-                    for k, v in matcher_config.items()
-                    if k not in ("max_edges", "discard_edges_if_rank_below")
-                }
-                select_config = {
-                    k: v
-                    for k, v in matcher_config.items()
-                    if k in ("max_edges", "discard_edges_if_rank_below")
-                }
+                if split == "validate" and index >= len(self.validate_data):
+                    data["id"] = data["id"] + "_real"
 
-                if split == "train":
-                    search_target = (
-                        " ".join(data["target"]) + " " + data["text_question"]
-                    )
+                if split == "train" or (
+                    split == "validate" and index >= len(self.validate_data)
+                ):
+                    target = " ".join(data["target"]) + " " + data["text_question"]
                 else:
                     if data["id"] not in search_targets:
                         raise ValueError("Set search targets first")
-                    search_target = (
-                        search_targets[data["id"]] + " " + data["text_question"]
-                    )
-
+                    target = search_targets[data["id"]] + " " + data["text_question"]
                 match = self.matcher.match_by_node_embedding(
                     data["text_question"],
-                    target_sentence=search_target,
+                    target_sentence=target,
                     seed=self.matcher_seed,
-                    **match_config,
+                    max_times=self.matcher_config["question_match_max_times"],
+                    max_depth=self.matcher_config["question_match_max_depth"],
+                    edge_top_k=self.matcher_config["question_match_edge_top_k"],
                 )
-                selection = self.matcher.select_paths(match, **select_config)
+                selection = self.matcher.select_paths(
+                    match, max_edges=self.matcher_config["question_select_max_edges"]
+                )
                 new_question = self.matcher.insert_selection(
                     data["text_question"], selection, insert_at_end=True,
                 )
@@ -249,13 +232,16 @@ class OpenBookQAWithSearchDataset:
 
                 match = self.matcher.match_by_node_embedding(
                     data["text_choices"],
-                    target_sentence=search_target,
+                    target_sentence=target,
                     source_mask=choice_mask,
                     seed=self.matcher_seed,
-                    max_depth=1,
-                    max_times=1000,
+                    max_times=self.matcher_config["choices_match_max_times"],
+                    max_depth=self.matcher_config["choices_match_max_depth"],
+                    edge_top_k=self.matcher_config["choices_match_edge_top_k"],
                 )
-                selection = self.matcher.select_paths(match, max_edges=6)
+                selection = self.matcher.select_paths(
+                    match, max_edges=self.matcher_config["choices_select_max_edges"]
+                )
                 new_choices = self.matcher.insert_selection(
                     data["text_choices"], selection,
                 )
@@ -293,40 +279,53 @@ class OpenBookQAWithSearchDataset:
         else:
             raise ValueError(f"Invalid split: {split}")
 
-        data = copy.deepcopy(data)
+        # data = copy.deepcopy(data)
+        #
+        # match = self.matcher.match_by_node_embedding(
+        #     data["text_question"],
+        #     target_sentence=data["text_question"],
+        #     seed=self.matcher_seed,
+        #     max_depth=1,
+        #     max_times=1000,
+        #     edge_top_k=10,
+        # )
+        # selection = self.matcher.select_paths(match, max_edges=3)
+        # question = self.matcher.insert_selection(
+        #     data["text_question"], selection, insert_at_end=True,
+        # )
+        #
+        # if self.include_prefix:
+        #     question = "search: " + question
+        #
+        # choice_mask = "+" * len(data["text_choices"])
+        # for choice in ("[A]", "[B]", "[C]", "[D]"):
+        #     start_pos = data["text_choices"].find(choice)
+        #     if start_pos != -1:
+        #         choice_mask = (
+        #             choice_mask[:start_pos]
+        #             + "-" * len(choice)
+        #             + choice_mask[start_pos + len(choice) :]
+        #         )
+        #
+        # match = self.matcher.match_by_node_embedding(
+        #     data["text_choices"],
+        #     target_sentence=data["text_question"],
+        #     source_mask=choice_mask,
+        #     seed=self.matcher_seed,
+        #     max_depth=1,
+        #     max_times=1000,
+        # )
+        # selection = self.matcher.select_paths(match, max_edges=6)
+        # choices = self.matcher.insert_selection(data["text_choices"], selection,)
+        # for choice in ("a", "b", "c", "d"):
+        #     choices = choices.replace(f"[ {choice} ]", f"[{choice.upper()}]")
 
         question = (
-            data["text_question"]
-            if not self.include_prefix
-            else "search: " + data["text_question"]
+            "search: " + data["text_question"]
+            if self.include_prefix
+            else data["text_question"]
         )
         choices = data["text_choices"]
-
-        if self.search_dropout_rate is not None and split == "train":
-            wnl = WordNetLemmatizer()
-            detok = TreebankWordDetokenizer()
-            question_tokens = nltk.word_tokenize(question)
-            question_tokens = [
-                q_token
-                if (
-                    wnl.lemmatize(q_token.lower()) not in data["target"]
-                    or self.search_dropout_rnd.random() > self.search_dropout_rate
-                )
-                else "<unk>"
-                for q_token in question_tokens
-            ]
-            question = detok.detokenize(question_tokens)
-            choices_tokens = nltk.word_tokenize(choices)
-            choices_tokens = [
-                c_token
-                if (
-                    wnl.lemmatize(c_token.lower()) not in data["target"]
-                    or self.search_dropout_rnd.random() > self.search_dropout_rate
-                )
-                else "<unk>"
-                for c_token in choices_tokens
-            ]
-            choices = detok.detokenize(choices_tokens)
 
         encoded_sentence = self.tokenizer(
             question,
@@ -400,6 +399,43 @@ class OpenBookQAWithSearchDataset:
         if self.match_closest_when_no_equal:
             print(f"Approximately correct ratio {float(approximately_correct) / total}")
 
+        base_ids = [k for k in is_answer_correct.keys() if "_real" not in k]
+        for bid in base_ids:
+            if not is_answer_correct[bid] and is_answer_correct[bid + "_real"]:
+                i, i_real = sorted(
+                    [
+                        i
+                        for i, id in enumerate(batch["id"])
+                        if id in (bid, bid + "_real")
+                    ]
+                )
+                ref_answer_tensor = batch["answer"][i]
+                ref_answer_tensor.masked_fill_(
+                    ref_answer_tensor == -100, self.tokenizer.pad_token_id
+                )
+                ref_answer = self.tokenizer.decode(
+                    ref_answer_tensor, skip_special_tokens=True
+                )
+                sentence_base = self.tokenizer.decode(
+                    batch["sentence"][i], skip_special_tokens=True
+                )
+                sentence_real = self.tokenizer.decode(
+                    batch["sentence"][i_real], skip_special_tokens=True
+                )
+                answer_base = self.tokenizer.decode(tokens[i], skip_special_tokens=True)
+                answer_real = self.tokenizer.decode(
+                    tokens[i_real], skip_special_tokens=True
+                )
+                print(
+                    f"real sentence: [{sentence_real}] \n"
+                    f"real answer: [{answer_real}] \n"
+                    f"real target: [{' '.join(batch['target'][i])}] \n"
+                    f"base sentence: [{sentence_base}] \n"
+                    f"base answer: [{answer_base}] \n"
+                    f"base target: [{self.validate_search_targets[bid]}] \n"
+                    f"ref_answer: [{ref_answer}]"
+                )
+
         save_inspect_data(is_answer_correct, "openbook_qa_val_answers")
         return {"accuracy": float(correct) / total}
 
@@ -416,12 +452,8 @@ class OpenBookQAWithSearchDataset:
                 ref_answer_tensor, skip_special_tokens=True
             )
             sentence = self.tokenizer.decode(
-                batch["sentence"][i],
-                skip_special_tokens=self.search_dropout_rate is None,
+                batch["sentence"][i], skip_special_tokens=True,
             )
-
-            if self.search_dropout_rate is not None:
-                sentence = sentence.strip("<pad>")
 
             keywords = set(nltk.word_tokenize(answer.lower()))
             ref_keywords = set(nltk.word_tokenize(ref_answer.lower()))
@@ -444,6 +476,56 @@ class OpenBookQAWithSearchDataset:
 
         return {"f1": total_f1 / total}
 
+    def test_qa(self, batch: BatchEncoding, tokens: t.Tensor):
+        total = tokens.shape[0]
+        correct = 0
+        approximately_correct = 0
+        missing = 0
+        is_answer_correct = {}
+        for i in range(tokens.shape[0]):
+            answer = self.tokenizer.decode(tokens[i], skip_special_tokens=True)
+            ref_answer_tensor = batch["answer"][i]
+            ref_answer_tensor.masked_fill_(
+                ref_answer_tensor == -100, self.tokenizer.pad_token_id
+            )
+            ref_answer = self.tokenizer.decode(
+                ref_answer_tensor, skip_special_tokens=True
+            )
+            sentence = self.tokenizer.decode(
+                batch["sentence"][i], skip_special_tokens=True
+            )
+            is_answer_correct[batch["id"][i]] = False
+            if answer == ref_answer:
+                correct += 1
+                is_answer_correct[batch["id"][i]] = True
+            elif answer not in batch["choices"][i]:
+                if self.match_closest_when_no_equal:
+                    # Gestalt Pattern Matching
+                    # https://en.wikipedia.org/wiki/Gestalt_Pattern_Matching
+                    possible_matches = difflib.get_close_matches(
+                        answer, batch["choices"][i], n=1
+                    )
+                    if len(possible_matches) == 0:
+                        missing += 1
+
+                    elif possible_matches[0] == ref_answer:
+                        approximately_correct += 1
+                        correct += 1
+                        is_answer_correct[batch["id"][i]] = True
+                else:
+                    missing += 1
+
+            print(
+                f"sentence: [{sentence}] \n"
+                f"answer: [{answer}] \n"
+                f"ref_answer: [{ref_answer}]"
+            )
+        print(f"Missing ratio {float(missing) / total}")
+        if self.match_closest_when_no_equal:
+            print(f"Approximately correct ratio {float(approximately_correct) / total}")
+
+        return {"accuracy": float(correct) / total}
+
     def generate_test_results(self, tokens: t.Tensor, directory: str):
         missing = 0
         with open_file_with_create_directories(
@@ -459,7 +541,7 @@ class OpenBookQAWithSearchDataset:
                 answer = self.tokenizer.decode(answer_tokens, skip_special_tokens=True)
                 for i, choice in enumerate(preprocessed["choices"]):
                     if answer == choice:
-                        file.write(f"{preprocessed['id']},{answer_keys[i]}")
+                        file.write(f"{preprocessed['id']},{answer_keys[i]}\n")
                         break
                 else:
                     missing += 1
@@ -485,6 +567,7 @@ class OpenBookQAWithSearchDataset:
         if not found:
             raise ValueError(f"Id {id} not found in split {split}")
         raw_search_target = self.tokenizer.decode(tokens, skip_special_tokens=True)
+        print(f"Search target of [{id}]: {raw_search_target}")
         search_target = sorted(list(set(nltk.word_tokenize(raw_search_target.lower()))))
         search_targets[id] = " ".join(search_target)
 

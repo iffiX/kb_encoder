@@ -107,7 +107,7 @@ class EnsembleTrainer(pl.LightningModule):
 
     def validation_epoch_end(self, outputs):
         batch, tokens = self.select_answer(outputs)
-        metrics = self.trainers[0].dataset.validate_tokens(batch, tokens)
+        metrics = self.trainers[0].dataset.validate(batch, tokens)
         for key, value in metrics.items():
             self.log(key, value, prog_bar=True, sync_dist=True)
         print("Validation result:")
@@ -125,9 +125,7 @@ class EnsembleTrainer(pl.LightningModule):
 
     def test_epoch_end(self, outputs):
         batch, tokens = self.select_answer(outputs)
-        self.trainers[0].dataset.generate_test_results_tokens(
-            tokens, self.stage_result_path
-        )
+        self.trainers[0].dataset.generate_test_results(tokens, self.stage_result_path)
 
     def configure_optimizers(self):
         return None

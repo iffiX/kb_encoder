@@ -17,12 +17,18 @@ dataset = OpenBookQADataset(
     matcher_mode="embedding",
     matcher_seed=697474,
     matcher_config={
-        "max_times": 1000,
-        "max_depth": 3,
-        "max_edges": 3,
-        "edge_beam_width": 20,
-        "stop_searching_edge_if_similarity_below": 0,
-        "discard_edges_if_rank_below": 0.3,
+        "question_match_max_times": 1000,
+        "question_match_max_depth": 3,
+        "question_match_edge_top_k": 10,
+        "question_match_source_context_range": 1,
+        "question_select_max_edges": 3,
+        "question_select_discard_edges_if_rank_below": "auto",
+        "choices_match_max_times": 1000,
+        "choices_match_max_depth": 2,
+        "choices_match_edge_top_k": 10,
+        "choices_match_source_context_range": 1,
+        "choices_select_max_edges": 6,
+        "choices_select_discard_edges_if_rank_below": "auto",
     },
     include_option_label_in_sentence=True,
     use_option_label_as_answer_and_choices=True,
@@ -112,13 +118,10 @@ def test_test(i):
 
 
 if __name__ == "__main__":
-    dataset.validate_data[492]["fact"] = "seed"
-    result = dataset.generator(492, "validate")
-    sentence = tokenizer.decode(result["sentence"][0], skip_special_tokens=True).lower()
-    print(sentence)
-    # if fact not in sentence:
-    #     print(fact)
-    #     print(sentence)
+    # dataset.validate_data[0]["fact"] = "resource money"
+    # result = dataset.generator(432, "test")
+    # sentence = tokenizer.decode(result["sentence"][0], skip_special_tokens=True).lower()
+    # print(sentence)
 
     # with multiprocessing.Pool(processes=14) as pool:
     #     results = pool.map(test_train, list(range(len(dataset.train_dataset))))
@@ -127,13 +130,13 @@ if __name__ == "__main__":
     # results = map(test_train, list(range(len(dataset.train_dataset))))
     # print(f"Acc: {sum(results) / len(dataset.train_dataset)}")
 
-    # with multiprocessing.Pool(processes=14) as pool:
-    #     results = pool.map(test_validate, list(range(len(dataset.validate_dataset))))
-    #     print(f"Acc: {sum(results) / len(dataset.validate_dataset)}")
+    with multiprocessing.Pool(processes=14) as pool:
+        results = pool.map(test_validate, list(range(len(dataset.validate_dataset))))
+        print(f"Acc: {sum(results) / len(dataset.validate_dataset)}")
 
-    # with multiprocessing.Pool(processes=14) as pool:
-    #     results = pool.map(test_test, list(range(len(dataset.test_dataset))))
-    #     print(f"Acc: {sum(results) / len(dataset.test_dataset)}")
+    with multiprocessing.Pool(processes=14) as pool:
+        results = pool.map(test_test, list(range(len(dataset.test_dataset))))
+        print(f"Acc: {sum(results) / len(dataset.test_dataset)}")
 
     # results = map(test_test, list(range(len(dataset.test_dataset))))
     # print(f"Acc: {sum(results) / len(dataset.test_dataset)}")

@@ -111,7 +111,8 @@ PYBIND11_MODULE(matcher, m) {
                  });
 
     py::class_<KnowledgeMatcher::MatchResult>(m, "MatchResult")
-            .def(pybind11::init<>());
+            .def(pybind11::init<>())
+            .def_readonly("target_node_num", &KnowledgeMatcher::MatchResult::targetNodeNum);
 
     py::class_<KnowledgeMatcher::TrainInfo>(m, "TrainInfo")
             .def(pybind11::init<>())
@@ -125,19 +126,14 @@ PYBIND11_MODULE(matcher, m) {
             .def_readonly("corpus_size", &KnowledgeMatcher::corpusSize)
             .def_readonly("document_count_of_node_in_corpus", &KnowledgeMatcher::documentCountOfNodeInCorpus)
             .def("set_corpus", &KnowledgeMatcher::setCorpus)
-            .def("get_connections_for_training", &KnowledgeMatcher::getConnectionsForTraining,
-                 py::arg("match_composite_target"),
-                 py::arg("source_sentence"),
-                 py::arg("target_sentence") = std::vector<int>{},
-                 py::arg("source_mask") = std::vector<int>{},
-                 py::arg("target_mask") = std::vector<int>{})
             .def("match_by_node_embedding", &KnowledgeMatcher::matchByNodeEmbedding,
                  py::arg("source_sentence"),
                  py::arg("target_sentence") = std::vector<int>{},
                  py::arg("source_mask") = std::vector<int>{},
                  py::arg("target_mask") = std::vector<int>{},
                  py::arg("max_times") = 100, py::arg("max_depth") = 3, py::arg("seed") = -1,
-                 py::arg("edge_beam_width") = -1, py::arg("trim_path") = true,
+                 py::arg("edge_top_k") = -1, py::arg("source_context_range") = 0,
+                 py::arg("trim_path") = true,
                  py::arg("stop_searching_edge_if_similarity_below") = 0)
             .def("match_result_paths_to_strings", &KnowledgeMatcher::matchResultPathsToStrings)
             .def("join_match_results", &KnowledgeMatcher::joinMatchResults)

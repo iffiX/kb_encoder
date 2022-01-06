@@ -1,6 +1,5 @@
 import re
 import os
-import nltk
 import logging
 from transformers import PreTrainedTokenizerBase
 from encoder.dataset.matcher import ConceptNetReader, KnowledgeMatcher
@@ -99,9 +98,17 @@ class OpenBookQAMatcher(BaseMatcher):
         crowd_source_facts_path = os.path.join(
             openbook_qa_path, "Additional", "crowdsourced-facts.txt"
         )
-
+        # qasc_additional_path = os.path.join(preprocess_cache_dir, "qasc_additional.txt")
+        manual_additional_path = os.path.join(
+            preprocess_cache_dir, "manual_additional.txt"
+        )
         count = 0
-        for path in (openbook_qa_facts_path, crowd_source_facts_path):
+        for path in (
+            openbook_qa_facts_path,
+            crowd_source_facts_path,
+            # qasc_additional_path,
+            manual_additional_path,
+        ):
             with open(path, "r") as file:
                 for line in file:
                     line = line.strip("\n").strip(".").strip('"').strip("'").strip(",")

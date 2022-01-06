@@ -60,7 +60,7 @@ class OpenBookQATrainer(pl.LightningModule):
 
     @property
     def monitor(self):
-        return "accuracy"
+        return "test_accuracy"
 
     @property
     def monitor_mode(self):
@@ -77,14 +77,24 @@ class OpenBookQATrainer(pl.LightningModule):
         )
 
     def val_dataloader(self):
-        return DataLoader(
-            dataset=self.dataset.validate_dataset,
-            num_workers=self.config.load_worker_num,
-            prefetch_factor=self.config.load_prefetch_per_worker,
-            batch_size=self.config.batch_size,
-            collate_fn=collate_function_dict_to_batch_encoding,
-            worker_init_fn=set_worker_sharing_strategy,
-        )
+        return [
+            DataLoader(
+                dataset=self.dataset.validate_dataset,
+                num_workers=self.config.load_worker_num,
+                prefetch_factor=self.config.load_prefetch_per_worker,
+                batch_size=self.config.batch_size,
+                collate_fn=collate_function_dict_to_batch_encoding,
+                worker_init_fn=set_worker_sharing_strategy,
+            ),
+            DataLoader(
+                dataset=self.dataset.test_dataset,
+                num_workers=self.config.load_worker_num,
+                prefetch_factor=self.config.load_prefetch_per_worker,
+                batch_size=self.config.batch_size,
+                collate_fn=collate_function_dict_to_batch_encoding,
+                worker_init_fn=set_worker_sharing_strategy,
+            ),
+        ]
 
     def test_dataloader(self):
         return DataLoader(
@@ -122,7 +132,7 @@ class OpenBookQATrainer(pl.LightningModule):
         return out.loss
 
     # noinspection PyTypeChecker
-    def validation_step(self, batch: BatchEncoding, _batch_idx):
+    def validation_step(self, batch: BatchEncoding, _batch_idx, _dataloader_idx):
         out = self.model.generate(
             batch["sentence"].to(self.real_device or self.device),
             max_length=self.config.generate_length,
@@ -150,14 +160,15 @@ class OpenBookQATrainer(pl.LightningModule):
             self.validate_on_every_process(outputs)
 
     def validate_on_every_process(self, outputs):
-        batch, tokens = collate_and_filter_outputs(outputs)
-        metrics = self.dataset.validate_tokens(batch, tokens)
-        for key, value in metrics.items():
-            self.log(key, value, prog_bar=True, sync_dist=True)
-        if not self.is_distributed or get_rank() == 0:
-            print("Validation result:")
+        for prefix, dataloader_idx in (("val", 0), ("test", 1)):
+            batch, tokens = collate_and_filter_outputs(outputs[dataloader_idx])
+            metrics = self.dataset.validate(batch, tokens)
             for key, value in metrics.items():
-                print(f"{key}: {value}")
+                self.log(f"{prefix}_{key}", value, prog_bar=True, sync_dist=True)
+            if not self.is_distributed or get_rank() == 0:
+                print(f"Validation on {prefix} result:")
+                for key, value in metrics.items():
+                    print(f"{prefix}_{key}: {value}")
 
     def test_step(self, batch: BatchEncoding, _batch_idx):
         out = self.model.generate(
@@ -189,7 +200,7 @@ class OpenBookQATrainer(pl.LightningModule):
     @rank_zero_only
     def test_on_main_process(self, outputs):
         _, tokens = collate_and_filter_outputs(outputs)
-        self.dataset.generate_test_results_tokens(tokens, self.stage_result_path)
+        self.dataset.generate_test_results(tokens, self.stage_result_path)
 
     def configure_optimizers(self):
         if self.config.optimizer_class == "Adafactor":
@@ -214,7 +225,7 @@ class OpenBookQATrainer(pl.LightningModule):
                 {
                     # REQUIRED: The scheduler instance
                     "scheduler": sch,
-                    "monitor": "accuracy",
+                    "monitor": "test_accuracy",
                 }
             ],
         )
