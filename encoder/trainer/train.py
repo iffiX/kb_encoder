@@ -3,8 +3,6 @@ import os
 import logging
 import pytorch_lightning as pl
 from ..utils.config import *
-from .qa_trainer import QATrainer
-from .glue_trainer import GLUETrainer
 from .commonsense_qa_trainer import CommonsenseQATrainer
 from .openbook_qa_trainer import OpenBookQATrainer
 from .openbook_qa_with_search_trainer import OpenBookQAWithSearchTrainer
@@ -15,8 +13,6 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.plugins import DDPPlugin
 
 stage_name_to_trainer_map = {
-    "qa": QATrainer,
-    "glue": GLUETrainer,
     "commonsense_qa": CommonsenseQATrainer,
     "openbook_qa": OpenBookQATrainer,
     "openbook_qa_with_search": OpenBookQAWithSearchTrainer,

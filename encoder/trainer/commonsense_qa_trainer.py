@@ -4,9 +4,14 @@ import torch as t
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 from torch.distributed import all_gather_object, get_world_size, get_rank
-from transformers import T5ForConditionalGeneration, T5TokenizerFast, BatchEncoding
+from transformers import T5ForConditionalGeneration, AutoTokenizer, BatchEncoding
 from pytorch_lightning.utilities import rank_zero_only
-from .utils import collate_and_filter_outputs, set_worker_sharing_strategy
+from .utils import (
+    collate_and_filter_outputs,
+    set_worker_sharing_strategy,
+    make_scheduler,
+)
+from encoder.model.deberta.model import Model
 from encoder.dataset.base import collate_function_dict_to_batch_encoding
 from encoder.dataset.commonsense_qa import CommonsenseQADataset
 from encoder.utils.config import CommonsenseQATrainConfig, fix_missing
@@ -29,8 +34,8 @@ class CommonsenseQATrainer(pl.LightningModule):
         self.stage_result_path = stage_result_path
         self.is_distributed = is_distributed
 
-        self.tokenizer = T5TokenizerFast.from_pretrained(
-            config.base_type if config.base_type.startswith("t5") else "t5-base",
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            "t5-base" if config.base_type.startswith("t5") else config.base_type,
             cache_dir=model_cache_dir,
             proxies=proxies,
             mirror=huggingface_mirror,
@@ -47,15 +52,20 @@ class CommonsenseQATrainer(pl.LightningModule):
             include_option_label_in_answer_and_choices=config.include_option_label_in_answer_and_choices,
             use_option_label_as_answer_and_choices=config.use_option_label_as_answer_and_choices,
             match_closest_when_no_equal=config.match_closest_when_no_equal,
+            output_mode="single" if config.base_type.startswith("t5") else "splitted",
         )
-        self.model = T5ForConditionalGeneration.from_pretrained(
-            config.base_type,
-            cache_dir=model_cache_dir,
-            proxies=proxies,
-            mirror=huggingface_mirror,
-            return_dict=True,
-        )
-        self.real_device = "cpu"
+        if config.base_type.startswith("t5"):
+            self.model = T5ForConditionalGeneration.from_pretrained(
+                config.base_type,
+                cache_dir=model_cache_dir,
+                proxies=proxies,
+                mirror=huggingface_mirror,
+                return_dict=True,
+            )
+        else:
+            model_configs = config.model_configs or {}
+            self.model = Model(config.base_type, 5, **model_configs)
+        self._real_device = None
 
     @property
     def monitor(self):
@@ -64,6 +74,10 @@ class CommonsenseQATrainer(pl.LightningModule):
     @property
     def monitor_mode(self):
         return "max"
+
+    @property
+    def real_device(self):
+        return self._real_device or self.device
 
     def train_dataloader(self):
         return DataLoader(
@@ -96,7 +110,10 @@ class CommonsenseQATrainer(pl.LightningModule):
         )
 
     def on_fit_start(self):
-        if self.config.device_map is not None:
+        if (
+            self.config.base_type.startswith("t5")
+            and self.config.device_map is not None
+        ):
             if self.is_distributed:
                 raise ValueError(
                     "Parallelize T5 model is incompatible with distributed training."
@@ -105,38 +122,56 @@ class CommonsenseQATrainer(pl.LightningModule):
                 0
             ]
             # replace device property
-            self.real_device = f"cuda:{start_device_id}"
+            self._real_device = f"cuda:{start_device_id}"
             self.model.parallelize(self.config.device_map)
         else:
-            self.real_device = None
+            self._real_device = None
 
     # noinspection PyTypeChecker
     def training_step(self, batch: BatchEncoding, batch_idx):
-        # answer shape [batch_size, sequence_length]
-        out = self.model(
-            input_ids=batch["sentence"].to(self.real_device or self.device),
-            attention_mask=batch["mask"].to(self.real_device or self.device),
-            labels=batch["answer"].to(self.real_device or self.device),
-        )
+        if self.config.base_type.startswith("t5"):
+            # answer shape [batch_size, sequence_length]
+            out = self.model(
+                input_ids=batch["sentence"].to(self.real_device),
+                attention_mask=batch["mask"].to(self.real_device),
+                labels=batch["answer"].to(self.real_device),
+            )
+        else:
+            out = self.model(
+                input_ids=batch["sentence"].to(self.real_device),
+                attention_mask=batch["mask"].to(self.real_device),
+                token_type_ids=batch["type_ids"].to(self.real_device),
+                labels=batch["label"].to(self.real_device),
+            )
         return out.loss
 
     # noinspection PyTypeChecker
     def validation_step(self, batch: BatchEncoding, _batch_idx):
-        out = self.model.generate(
-            batch["sentence"].to(self.real_device or self.device),
-            max_length=self.config.generate_length,
-            attention_mask=batch["mask"].to(self.real_device or self.device),
-            early_stopping=True,
-        )
-        result = t.full(
-            [out.shape[0], self.config.generate_length], self.tokenizer.pad_token_id
-        )
-        result[:, : out.shape[1]] = out.cpu()
-        batch = batch.to("cpu")
-        return {
-            "batch": batch,
-            "tokens": result,
-        }
+        if self.config.base_type.startswith("t5"):
+            out = self.model.generate(
+                batch["sentence"].to(self.real_device),
+                max_length=self.config.generate_length,
+                attention_mask=batch["mask"].to(self.real_device),
+                early_stopping=True,
+            )
+            result = t.full(
+                [out.shape[0], self.config.generate_length], self.tokenizer.pad_token_id
+            )
+            result[:, : out.shape[1]] = out.cpu()
+            batch = batch.to("cpu")
+            return {
+                "batch": batch,
+                "result": result,
+            }
+        else:
+            return {
+                "batch": batch.to("cpu"),
+                "result": self.model.predict(
+                    input_ids=batch["sentence"].to(self.real_device),
+                    attention_mask=batch["mask"].to(self.real_device),
+                    token_type_ids=batch["type_ids"].to(self.real_device),
+                ).cpu(),
+            }
 
     def validation_epoch_end(self, outputs):
         if self.is_distributed:
@@ -149,8 +184,11 @@ class CommonsenseQATrainer(pl.LightningModule):
             self.validate_on_every_process(outputs)
 
     def validate_on_every_process(self, outputs):
-        batch, tokens = collate_and_filter_outputs(outputs)
-        metrics = self.dataset.validate_tokens(batch, tokens)
+        batch, result = collate_and_filter_outputs(outputs)
+        if self.config.base_type.startswith("t5"):
+            metrics = self.dataset.validate_tokens(batch, result)
+        else:
+            metrics = self.dataset.validate_logits(batch, result)
         for key, value in metrics.items():
             self.log(key, value, prog_bar=True, sync_dist=True)
         if not self.is_distributed or get_rank() == 0:
@@ -159,21 +197,31 @@ class CommonsenseQATrainer(pl.LightningModule):
                 print(f"{key}: {value}")
 
     def test_step(self, batch: BatchEncoding, _batch_idx):
-        out = self.model.generate(
-            batch["sentence"].to(self.real_device or self.device),
-            max_length=self.config.generate_length,
-            attention_mask=batch["mask"].to(self.real_device or self.device),
-            early_stopping=True,
-        )
-        result = t.full(
-            [out.shape[0], self.config.generate_length], self.tokenizer.pad_token_id
-        )
-        result[:, : out.shape[1]] = out.cpu()
-        batch = batch.to("cpu")
-        return {
-            "batch": batch,
-            "tokens": result,
-        }
+        if self.config.base_type.startswith("t5"):
+            out = self.model.generate(
+                batch["sentence"].to(self.real_device),
+                max_length=self.config.generate_length,
+                attention_mask=batch["mask"].to(self.real_device),
+                early_stopping=True,
+            )
+            result = t.full(
+                [out.shape[0], self.config.generate_length], self.tokenizer.pad_token_id
+            )
+            result[:, : out.shape[1]] = out.cpu()
+            batch = batch.to("cpu")
+            return {
+                "batch": batch,
+                "result": result,
+            }
+        else:
+            return {
+                "batch": batch.to("cpu"),
+                "result": self.model.predict(
+                    input_ids=batch["sentence"].to(self.real_device),
+                    attention_mask=batch["mask"].to(self.real_device),
+                    token_type_ids=batch["type_ids"].to(self.real_device),
+                ).cpu(),
+            }
 
     def test_epoch_end(self, outputs):
         if self.is_distributed:
@@ -187,25 +235,36 @@ class CommonsenseQATrainer(pl.LightningModule):
 
     @rank_zero_only
     def test_on_main_process(self, outputs):
-        _, tokens = collate_and_filter_outputs(outputs)
-        self.dataset.generate_test_results_tokens(tokens, self.stage_result_path)
+        _, result = collate_and_filter_outputs(outputs)
+        if self.config.base_type.startswith("t5"):
+            self.dataset.generate_test_result_tokens(result, self.stage_result_path)
+        else:
+            self.dataset.generate_test_result_logits(result, self.stage_result_path)
 
     def configure_optimizers(self):
         if self.config.optimizer_class == "Adafactor":
             optim = Adafactor(
-                self.parameters(),
+                self.model.parameters(),
                 lr=self.config.learning_rate,
                 weight_decay=self.config.l2_regularization,
             )
         else:
             optim_cls = getattr(t.optim, self.config.optimizer_class)
             optim = optim_cls(
-                self.parameters(),
+                self.model.parameters(),
                 lr=self.config.learning_rate,
                 weight_decay=self.config.l2_regularization,
             )
-        sch = t.optim.lr_scheduler.ReduceLROnPlateau(
-            optim, mode="max", factor=0.3, patience=0, min_lr=3e-5, verbose=True
+        training_steps = (
+            len(self.dataset.train_dataset)
+            * self.config.epochs
+            // (self.config.batch_size * self.config.accumulate_grad_batches)
+        )
+        sch = make_scheduler(
+            optim,
+            self.config.scheduler_warmup_proportion,
+            training_steps,
+            self.config.scheduler_cycles,
         )
         return (
             [optim],
@@ -213,7 +272,7 @@ class CommonsenseQATrainer(pl.LightningModule):
                 {
                     # REQUIRED: The scheduler instance
                     "scheduler": sch,
-                    "monitor": "accuracy",
+                    "monitor": self.monitor,
                 }
             ],
         )

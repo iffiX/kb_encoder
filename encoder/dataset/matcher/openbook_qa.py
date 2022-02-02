@@ -1,5 +1,6 @@
 import re
 import os
+import json
 import logging
 from transformers import PreTrainedTokenizerBase
 from encoder.dataset.matcher import ConceptNetReader, KnowledgeMatcher
@@ -88,6 +89,7 @@ class OpenBookQAMatcher(BaseMatcher):
 
         # Add knowledge from openbook QA as composite nodes
         self.add_openbook_qa_knowledge()
+        # self.add_openbook_qa_train_dataset()
 
     def add_openbook_qa_knowledge(self):
         logging.info("Adding OpenBook QA knowledge")
@@ -98,7 +100,7 @@ class OpenBookQAMatcher(BaseMatcher):
         crowd_source_facts_path = os.path.join(
             openbook_qa_path, "Additional", "crowdsourced-facts.txt"
         )
-        # qasc_additional_path = os.path.join(preprocess_cache_dir, "qasc_additional.txt")
+        qasc_additional_path = os.path.join(preprocess_cache_dir, "qasc_additional.txt")
         manual_additional_path = os.path.join(
             preprocess_cache_dir, "manual_additional.txt"
         )
@@ -117,6 +119,29 @@ class OpenBookQAMatcher(BaseMatcher):
                     count += 1
                     ids, mask = self.tokenize_and_mask(line)
                     self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
+        logging.info(f"Added {count} composite nodes")
+
+    def add_openbook_qa_train_dataset(self):
+        logging.info("Adding OpenBook QA train dataset")
+        openbook_qa_path = os.path.join(
+            dataset_cache_dir, "openbook_qa", "OpenBookQA-V1-Sep2018", "Data"
+        )
+        openbook_qa_train_dataset_path = os.path.join(
+            openbook_qa_path, "Main", "train.jsonl"
+        )
+        count = 0
+        with open(openbook_qa_train_dataset_path, "r") as file:
+            for line in file:
+                sample = json.loads(line)
+                correct_choice = [
+                    c["text"]
+                    for c in sample["question"]["choices"]
+                    if c["label"] == sample["answerKey"]
+                ][0]
+                line = sample["question"]["stem"] + " " + correct_choice
+                count += 1
+                ids, mask = self.tokenize_and_mask(line)
+                self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
         logging.info(f"Added {count} composite nodes")
 
     def __reduce__(self):

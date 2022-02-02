@@ -57,6 +57,7 @@ class BaseMatcher:
         source_context_range: int = 0,
         trim_path: bool = True,
         stop_searching_edge_if_similarity_below: float = 0,
+        source_context_weight: float = 0.5,
     ):
         """
         Returns:
@@ -84,6 +85,7 @@ class BaseMatcher:
             source_context_range=source_context_range,
             trim_path=trim_path,
             stop_searching_edge_if_similarity_below=stop_searching_edge_if_similarity_below,
+            source_context_weight=source_context_weight,
         )
         return result
 
@@ -104,7 +106,7 @@ class BaseMatcher:
                 raise ValueError(
                     "discard_edges_if_rank_below can only be set to float or 'auto'"
                 )
-            discard_edges_if_rank_below = max(-match.target_node_num / 40 + 0.475, 0.2)
+            discard_edges_if_rank_below = max(-match.target_node_num / 40 + 0.325, 0.2)
         return self.matcher.select_paths(match, max_edges, discard_edges_if_rank_below)
 
     def selection_to_list_of_strings(

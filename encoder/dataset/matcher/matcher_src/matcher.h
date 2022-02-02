@@ -123,8 +123,8 @@ public:
     Trie nodeTrie;
     std::unordered_map<std::vector<int>, long, VectorHash> nodeMap;
     std::vector<bool> isNodeComposite;
-    std::unordered_map<long, std::vector<long>> compositeNodes;
-    std::unordered_map<long, size_t> compositeComponentCount;
+    std::unordered_map<long, std::unordered_map<long, float>> compositeNodes;
+    std::unordered_map<long, float> compositeComponentCount;
     std::shared_ptr<HighFive::File> nodeEmbeddingFile;
     std::shared_ptr<HighFive::DataSet> nodeEmbeddingDataset;
     std::shared_ptr<void> nodeEmbeddingMem;
@@ -274,7 +274,7 @@ public:
     KnowledgeBase kb;
     bool isCorpusSet = false;
     size_t corpusSize = 0;
-    std::unordered_map<long, size_t> documentCountOfNodeInCorpus;
+    std::unordered_map<long, float> documentCountOfNodeInCorpus;
 
 public:
     explicit KnowledgeMatcher(const KnowledgeBase &knowledgeBase);
@@ -288,7 +288,8 @@ public:
                          const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
                          int maxTimes = 100, int maxDepth = 3, int seed = -1,
                          int edgeTopK = -1, int sourceContextRange = 0, bool trimPath = true,
-                         float stopSearchingEdgeIfSimilarityBelow = 0) const;
+                         float stopSearchingEdgeIfSimilarityBelow = 0,
+                         float sourceContextWeight = 0.2) const;
 
     std::vector<std::string> matchResultPathsToStrings(const MatchResult &matchResult) const;
 
@@ -307,9 +308,9 @@ private:
 
     std::string edgeToStringAnnotation(size_t edgeIndex) const;
 
-    float computeTfidf(long node,
-                       const std::unordered_map<long, size_t> &nodeCount,
-                       const std::unordered_map<size_t, std::vector<int>> &nodeMatch) const;
+    float computeTfidf(long node, float documentNodeCountSum,
+                       const std::unordered_map<long, float> &nodeCount,
+                       const std::unordered_map<long, float> &documentNodeCount) const;
 
     void matchForSourceAndTarget(const std::vector<int> &sourceSentence,
                                  const std::vector<int> &targetSentence,

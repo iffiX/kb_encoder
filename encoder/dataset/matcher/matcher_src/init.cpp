@@ -134,7 +134,8 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("max_times") = 100, py::arg("max_depth") = 3, py::arg("seed") = -1,
                  py::arg("edge_top_k") = -1, py::arg("source_context_range") = 0,
                  py::arg("trim_path") = true,
-                 py::arg("stop_searching_edge_if_similarity_below") = 0)
+                 py::arg("stop_searching_edge_if_similarity_below") = 0,
+                 py::arg("source_context_weight") = 0.2)
             .def("match_result_paths_to_strings", &KnowledgeMatcher::matchResultPathsToStrings)
             .def("join_match_results", &KnowledgeMatcher::joinMatchResults)
             .def("select_paths", &KnowledgeMatcher::selectPaths)

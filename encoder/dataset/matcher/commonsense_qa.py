@@ -72,18 +72,20 @@ class CommonsenseQAMatcher(BaseMatcher):
             matcher.save(archive_path)
         else:
             matcher = KnowledgeMatcher(archive_path)
-
+        super(CommonsenseQAMatcher, self).__init__(tokenizer, matcher)
         # Disable relations of similar word forms
-        # matcher.kb.disable_edges_of_relationships(
-        #     [
-        #         "DerivedFrom",
-        #         "EtymologicallyDerivedFrom",
-        #         "EtymologicallyRelatedTo",
-        #         "FormOf",
-        #     ]
-        # )
+        matcher.kb.disable_edges_of_relationships(
+            [
+                "DerivedFrom",
+                "EtymologicallyDerivedFrom",
+                "EtymologicallyRelatedTo",
+                # "FormOf",
+            ]
+        )
+        self.matcher.kb.disable_edges_with_weight_below(1)
         super(CommonsenseQAMatcher, self).__init__(tokenizer, matcher)
         # self.add_wordnet_definition()
+        # self.add_openbook_qa_knowledge()
         # self.add_generics_kb()
 
     # def add_generics_kb(self):
@@ -123,36 +125,66 @@ class CommonsenseQAMatcher(BaseMatcher):
     #                 self.tokenizer.encode(knowledge, add_special_tokens=False),
     #             )
     #     logging.info(f"Added {len(added)} composite nodes")
-    #
-    # def add_wordnet_definition(self):
-    #     logging.info("Adding wordnet definition")
-    #     added = set()
-    #     for ss in wordnet.all_synsets():
-    #         s = [ln.replace("_", " ").lower() for ln in ss.lemma_names()]
-    #         definition = (
-    #             ss.definition()
-    #             .replace("(", ",")
-    #             .replace(")", ",")
-    #             .replace(";", ",")
-    #             .replace('"', " ")
-    #             .lower()
-    #         )
-    #         knowledge = f"{','.join(s)} is defined as {definition}"
-    #
-    #         if len(knowledge) > 100:
-    #             # if trim_index = -1 this will also work, but not trimming anything
-    #             trim_index = knowledge.find(" ", 100)
-    #             knowledge = knowledge[:trim_index]
-    #         if knowledge not in added:
-    #             added.add(knowledge)
-    #             self.matcher.kb.add_composite_node(
-    #                 knowledge,
-    #                 "RelatedTo",
-    #                 self.tokenizer.encode(knowledge, add_special_tokens=False),
-    #             )
-    #             # ids, mask = self.tokenize_and_mask(knowledge)
-    #             # self.matcher.kb.add_composite_node(knowledge, "RelatedTo", ids, mask)
-    #     logging.info(f"Added {len(added)} composite nodes")
+
+    def add_openbook_qa_knowledge(self):
+        logging.info("Adding OpenBook QA knowledge")
+        openbook_qa_path = os.path.join(
+            dataset_cache_dir, "openbook_qa", "OpenBookQA-V1-Sep2018", "Data"
+        )
+        openbook_qa_facts_path = os.path.join(openbook_qa_path, "Main", "openbook.txt")
+        crowd_source_facts_path = os.path.join(
+            openbook_qa_path, "Additional", "crowdsourced-facts.txt"
+        )
+        qasc_additional_path = os.path.join(preprocess_cache_dir, "qasc_additional.txt")
+        manual_additional_path = os.path.join(
+            preprocess_cache_dir, "manual_additional.txt"
+        )
+        count = 0
+        for path in (
+            openbook_qa_facts_path,
+            crowd_source_facts_path,
+            # qasc_additional_path,
+            manual_additional_path,
+        ):
+            with open(path, "r") as file:
+                for line in file:
+                    line = line.strip("\n").strip(".").strip('"').strip("'").strip(",")
+                    if len(line) < 3:
+                        continue
+                    count += 1
+                    ids, mask = self.tokenize_and_mask(line)
+                    self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
+        logging.info(f"Added {count} composite nodes")
+
+    def add_wordnet_definition(self):
+        logging.info("Adding wordnet definition")
+        added = set()
+        for ss in wordnet.all_synsets():
+            s = [ln.replace("_", " ").lower() for ln in ss.lemma_names()]
+            if s[0].count(" ") > 0:
+                continue
+            definition = (
+                ss.definition()
+                .replace("(", ",")
+                .replace(")", ",")
+                .replace(";", ",")
+                .replace('"', " ")
+                .lower()
+            )
+            # knowledge = f"{','.join(s)} is defined as {definition}"
+            knowledge = f"{s[0]} is defined as {definition}"
+
+            if len(knowledge) > 100:
+                # if trim_index = -1 this will also work, but not trimming anything
+                trim_index = knowledge.find(" ", 100)
+                knowledge = knowledge[:trim_index]
+            if knowledge not in added:
+                added.add(knowledge)
+                # Only allow definition part to be matched
+                sentence_mask = "+" * len(s[0]) + "-" * (len(knowledge) - len(s[0]))
+                ids, mask = self.tokenize_and_mask(knowledge, sentence_mask)
+                self.matcher.kb.add_composite_node(knowledge, "RelatedTo", ids, mask)
+        logging.info(f"Added {len(added)} composite nodes")
 
     def __reduce__(self):
         return CommonsenseQAMatcher, (self.tokenizer,)

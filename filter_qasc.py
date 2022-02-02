@@ -4,6 +4,7 @@ import logging
 import multiprocessing
 import nltk
 import numpy as np
+from typing import List
 from tqdm import tqdm
 from nltk.stem import WordNetLemmatizer
 from multiprocessing import cpu_count
@@ -11,7 +12,7 @@ from encoder.utils.file import decompress_zip, decompress_tar_gz, download_to
 from encoder.utils.settings import dataset_cache_dir, preprocess_cache_dir
 
 TOP_K = 10
-
+MIN_SCORE = 0.35
 VERB_FILTER_SET = {
     "do",
     "did",
@@ -32,7 +33,9 @@ VERB_FILTER_SET = {
 
 TOKEN_INDEX_DICT = None  # type: dict
 TOKEN_OCCURRENCE_DICT = None  # type: dict
+# first key is token number in obqa, value is a list of qasc indexes of lines with this token
 CORPUS_SIZE = None  # type: int
+CORPUS_RAW_LENGTH = None  # type: List[int]
 
 
 def prepare_openbook_qa():
@@ -86,7 +89,10 @@ def line_to_valid_tokens(line):
 
 def line_to_token_index_set(line):
     tokens = list(wnl.lemmatize(x).lower() for x in nltk.word_tokenize(line))
-    return {TOKEN_INDEX_DICT[token] for token in tokens if token in TOKEN_INDEX_DICT}
+    return (
+        len(tokens),
+        {TOKEN_INDEX_DICT[token] for token in tokens if token in TOKEN_INDEX_DICT},
+    )
 
 
 def token_index_set_to_token_occurrence_dict(token_dict_size, token_index_set):
@@ -98,12 +104,21 @@ def token_index_set_to_token_occurrence_dict(token_dict_size, token_index_set):
 
 
 def filter_top_K_knowledge(token_indexes):
-    scores = np.zeros([CORPUS_SIZE], dtype=np.int32)
+    occurrence = np.zeros([CORPUS_SIZE], dtype=np.int32)
     for ti in token_indexes:
-        scores[TOKEN_OCCURRENCE_DICT[ti]] += 1
-    corpus_indexes = np.argpartition(scores, -TOP_K)[-TOP_K:]
-    ordered_indexes = corpus_indexes[np.argsort(-scores[corpus_indexes])].tolist()
-    return ordered_indexes, scores[ordered_indexes].tolist()
+        occurrence[TOKEN_OCCURRENCE_DICT[ti]] += 1
+    # F1 score
+    precision = occurrence.astype(np.float32) / np.array(
+        CORPUS_RAW_LENGTH, dtype=np.float32
+    )
+    recall = occurrence.astype(np.float32) / len(token_indexes)
+    score = precision * recall * 5 / (4 * precision + recall + 1e-4)
+    corpus_indexes = np.argpartition(score, -TOP_K)[-TOP_K:]
+    ordered_indexes = corpus_indexes[np.argsort(-score[corpus_indexes])]
+    ordered_scores = score[ordered_indexes]
+    ordered_indexes = ordered_indexes[ordered_scores > MIN_SCORE]
+    ordered_scores = ordered_scores[ordered_scores > MIN_SCORE]
+    return ordered_indexes.tolist(), ordered_scores.tolist()
 
 
 def init_global_variable(name, value):
@@ -161,7 +176,7 @@ if __name__ == "__main__":
     obqa_token_indexes = [
         [token_index_dict[valid_token] for valid_token in sample[0]]
         for sample in obqa_corpus
-    ]
+    ]  # List[List[int]]
 
     logging.info("Reading QASC corpus")
     path = os.path.join(qasc_corpus_path, "QASC_Corpus", "QASC_Corpus.txt")
@@ -173,12 +188,14 @@ if __name__ == "__main__":
         initializer=init_global_variable,
         initargs=("TOKEN_INDEX_DICT", token_index_dict),
     ) as pool:
-        qasc_token_index_set = list(
+        result = list(
             tqdm(
                 pool.imap(line_to_token_index_set, qasc_raw, chunksize=256),
                 total=len(qasc_raw),
             )
         )
+        qasc_token_index_set = [r[1] for r in result]
+        qasc_raw_length = [r[0] for r in result]
 
     token_occurrence_dict = token_index_set_to_token_occurrence_dict(
         len(token_index_dict), qasc_token_index_set
@@ -188,8 +205,8 @@ if __name__ == "__main__":
         processes=cpu_count() - 1,
         initializer=init_global_variable,
         initargs=(
-            ("TOKEN_OCCURRENCE_DICT", "CORPUS_SIZE"),
-            (token_occurrence_dict, len(qasc_token_index_set)),
+            ("TOKEN_OCCURRENCE_DICT", "CORPUS_SIZE", "CORPUS_RAW_LENGTH"),
+            (token_occurrence_dict, len(qasc_token_index_set), qasc_raw_length),
         ),
     ) as pool:
         result = list(

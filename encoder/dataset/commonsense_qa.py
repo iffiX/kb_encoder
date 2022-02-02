@@ -26,8 +26,8 @@ class CommonsenseQADataset:
     def __init__(
         self,
         tokenizer: PreTrainedTokenizerBase,
-        max_seq_length: int = 128,
-        generate_length: int = 16,
+        max_seq_length: int = 300,
+        generate_length: int = 32,
         use_matcher: bool = False,
         matcher_mode: str = "embedding",
         matcher_seed: int = -1,
@@ -38,6 +38,7 @@ class CommonsenseQADataset:
         insert_answers_at_end: bool = False,
         match_closest_when_no_equal: bool = True,
         regenerate: bool = True,
+        output_mode: str = "single",
     ):
         self.tokenizer = tokenizer
         # Word piece is stabler for matching purpose
@@ -58,6 +59,10 @@ class CommonsenseQADataset:
         )
         self.match_closest_when_no_equal = match_closest_when_no_equal
         self.regenerate = regenerate
+
+        if output_mode not in ("single", "splitted"):
+            raise ValueError(f"Invalid output_mode {output_mode}")
+        self.output_mode = output_mode
         self.matcher = CommonsenseQAMatcher(tokenizer=self.matcher_tokenizer)
 
         base = os.path.join(dataset_cache_dir, "commonsense_qa")
@@ -86,9 +91,7 @@ class CommonsenseQADataset:
             with open_file_with_create_directories(archive_path, "rb") as file:
                 data = pickle.load(file)
             if (
-                data["max_seq_length"] != self.max_seq_length
-                or data["generate_length"] != self.generate_length
-                or data["include_option_label_in_answer_and_choices"]
+                data["include_option_label_in_answer_and_choices"]
                 != self.include_option_label_in_answer_and_choices
                 or data["include_option_label_in_sentence"]
                 != self.include_option_label_in_sentence
@@ -131,57 +134,210 @@ class CommonsenseQADataset:
             data = self.validate_data[index]
         else:
             data = self.test_data[index]
-        if self.use_matcher:
-            # prevent any modification to data, also prevent checkpoint storing
-            # data to gpu by moving
-            data = copy.deepcopy(data)
+        if self.output_mode == "single":
+            if self.use_matcher:
+                # prevent any modification to data, also prevent checkpoint storing
+                # data to gpu by moving
+                data = copy.deepcopy(data)
+                if self.matcher_mode == "embedding":
+                    target = data["text_question"]
 
-            if self.matcher_mode == "embedding":
-                matcher_config = self.matcher_config or {
-                    "max_times": 300,
-                    "max_depth": 2,
-                    "max_edges": 16,
-                    "discard_edges_if_similarity_below": 0.45,
-                }
-                match = self.matcher.match_by_node_embedding(
-                    data["text_choices"],
-                    target_sentence=data["text_question"],
-                    seed=self.matcher_seed,
-                    **matcher_config,
+                    match = self.matcher.match_by_node_embedding(
+                        data["text_question"],
+                        target_sentence=target,
+                        seed=self.matcher_seed,
+                        max_times=self.matcher_config["question_match_max_times"],
+                        max_depth=self.matcher_config["question_match_max_depth"],
+                        edge_top_k=self.matcher_config["question_match_edge_top_k"],
+                        source_context_range=self.matcher_config[
+                            "question_match_source_context_range"
+                        ],
+                    )
+                    selection = self.matcher.select_paths(
+                        match,
+                        max_edges=self.matcher_config["question_select_max_edges"],
+                        discard_edges_if_rank_below=self.matcher_config[
+                            "question_select_discard_edges_if_rank_below"
+                        ],
+                    )
+
+                    new_question = self.matcher.insert_selection(
+                        data["text_question"], selection, insert_at_end=True,
+                    )
+
+                    # new_question = data["text_question"] + f" ({data['fact']}) "
+
+                    choice_mask = "+" * len(data["text_choices"])
+                    for choice in ("[A]", "[B]", "[C]", "[D]", "[E]"):
+                        start_pos = data["text_choices"].find(choice)
+                        if start_pos != -1:
+                            choice_mask = (
+                                choice_mask[:start_pos]
+                                + "-" * len(choice)
+                                + choice_mask[start_pos + len(choice) :]
+                            )
+
+                    match = self.matcher.match_by_node_embedding(
+                        data["text_choices"],
+                        target_sentence=target,
+                        source_mask=choice_mask,
+                        seed=self.matcher_seed,
+                        max_times=self.matcher_config["choices_match_max_times"],
+                        max_depth=self.matcher_config["choices_match_max_depth"],
+                        edge_top_k=self.matcher_config["choices_match_edge_top_k"],
+                        source_context_range=self.matcher_config[
+                            "choices_match_source_context_range"
+                        ],
+                    )
+                    selection = self.matcher.select_paths(
+                        match,
+                        max_edges=self.matcher_config["choices_select_max_edges"],
+                        discard_edges_if_rank_below=self.matcher_config[
+                            "choices_select_discard_edges_if_rank_below"
+                        ],
+                    )
+
+                    new_choices = self.matcher.insert_selection(
+                        data["text_choices"], selection,
+                    )
+                    for choice in ("a", "b", "c", "d"):
+                        new_choices = new_choices.replace(
+                            f"[ {choice} ]", f"[{choice.upper()}]"
+                        )
+                elif self.matcher_mode == "none":
+                    new_question = data["text_question"]
+                    new_choices = data["text_choices"]
+                else:
+                    raise ValueError(f"Invalid match mode {self.matcher_mode}")
+
+                encoded_sentence = self.tokenizer(
+                    new_question,
+                    new_choices,
+                    padding="max_length",
+                    max_length=self.max_seq_length,
+                    truncation=True,
+                    return_tensors="pt",
                 )
-            elif self.matcher_mode == "token":
-                matcher_config = self.matcher_config or {
-                    "max_times": 300,
-                    "max_depth": 2,
-                    "max_edges": 12,
-                }
-                match = self.matcher.match_by_token(
-                    data["text_choices"],
-                    target_sentence=data["text_question"],
-                    seed=self.matcher_seed,
-                    **matcher_config,
-                )
-            elif self.matcher_mode == "none":
-                match = {}
+                data["sentence"] = encoded_sentence.input_ids
+                data["mask"] = encoded_sentence.attention_mask
             else:
-                raise ValueError(f"Invalid match mode {self.matcher_mode}")
-
-            new_choices = self.matcher.insert_match(
-                data["text_choices"], match, insert_at_end=self.insert_answers_at_end
-            )
-            encoded_sentence = self.tokenizer(
-                data["text_question"],
-                new_choices,
+                encoded_sentence = self.tokenizer(
+                    data["text_question"],
+                    data["text_choices"],
+                    padding="max_length",
+                    max_length=self.max_seq_length,
+                    truncation=True,
+                    return_tensors="pt",
+                )
+                data["sentence"] = encoded_sentence.input_ids
+                data["mask"] = encoded_sentence.attention_mask
+            answer = self.tokenizer.encode(
+                data["text_answer"],
                 padding="max_length",
-                max_length=self.max_seq_length,
+                max_length=self.generate_length,
                 truncation=True,
                 return_tensors="pt",
             )
-            data["org_sentence"] = data["sentence"]
-            data["org_mask"] = data["mask"]
-            data["sentence"] = encoded_sentence.input_ids
-            data["mask"] = encoded_sentence.attention_mask
+            # Use -100 to focus on training the answer part, rather than pad
+            # tokens
+            answer.masked_fill_(answer == self.tokenizer.pad_token_id, -100)
+            data["answer"] = answer
+        else:
+            if self.use_matcher:
+                # prevent any modification to data, also prevent checkpoint storing
+                # data to gpu by moving
+                data = copy.deepcopy(data)
+                if self.matcher_mode == "embedding":
+                    target = data["text_question"]
 
+                    match = self.matcher.match_by_node_embedding(
+                        data["text_question"],
+                        target_sentence=data["text_question"],
+                        seed=self.matcher_seed,
+                        max_times=self.matcher_config["question_match_max_times"],
+                        max_depth=self.matcher_config["question_match_max_depth"],
+                        edge_top_k=self.matcher_config["question_match_edge_top_k"],
+                        source_context_range=self.matcher_config[
+                            "question_match_source_context_range"
+                        ],
+                    )
+                    selection = self.matcher.select_paths(
+                        match,
+                        max_edges=self.matcher_config["question_select_max_edges"],
+                        discard_edges_if_rank_below=self.matcher_config[
+                            "question_select_discard_edges_if_rank_below"
+                        ],
+                    )
+
+                    new_question = self.matcher.insert_selection(
+                        data["text_question"], selection, insert_at_end=True,
+                    )
+
+                    # new_question = data["text_question"] + f" ({data['fact']}) "
+
+                    new_choices = []
+                    for choice in data["choices"]:
+                        match = self.matcher.match_by_node_embedding(
+                            choice,
+                            target_sentence=target,
+                            seed=self.matcher_seed,
+                            max_times=self.matcher_config["choices_match_max_times"],
+                            max_depth=self.matcher_config["choices_match_max_depth"],
+                            edge_top_k=self.matcher_config["choices_match_edge_top_k"],
+                            source_context_range=self.matcher_config[
+                                "choices_match_source_context_range"
+                            ],
+                        )
+                        selection = self.matcher.select_paths(
+                            match,
+                            max_edges=self.matcher_config["choices_select_max_edges"],
+                            discard_edges_if_rank_below=self.matcher_config[
+                                "choices_select_discard_edges_if_rank_below"
+                            ],
+                        )
+
+                        new_choices.append(
+                            self.matcher.insert_selection(choice, selection,)
+                        )
+                elif self.matcher_mode == "none":
+                    new_question = data["text_question"]
+                    new_choices = data["choices"]
+                else:
+                    raise ValueError(f"Invalid match mode {self.matcher_mode}")
+
+                sentences, masks, type_ids = [], [], []
+                for choice in new_choices:
+                    encoded_sentence = self.tokenizer(
+                        new_question,
+                        choice,
+                        padding="max_length",
+                        max_length=self.max_seq_length,
+                        truncation=True,
+                        return_tensors="pt",
+                    )
+                    sentences.append(encoded_sentence.input_ids)
+                    masks.append(encoded_sentence.attention_mask)
+                    type_ids.append(encoded_sentence.token_type_ids)
+                data["sentence"] = t.stack(sentences, dim=1)
+                data["mask"] = t.stack(masks, dim=1)
+                data["type_ids"] = t.stack(type_ids, dim=1)
+            else:
+                sentences, masks, type_ids = [], [], []
+                for choice in data["choices"]:
+                    encoded_sentence = self.tokenizer(
+                        data["text_question"],
+                        choice,
+                        padding="max_length",
+                        max_length=self.max_seq_length,
+                        truncation=True,
+                        return_tensors="pt",
+                    )
+                    sentences.append(encoded_sentence.input_ids)
+                    masks.append(encoded_sentence.attention_mask)
+                    type_ids.append(encoded_sentence.token_type_ids)
+                data["sentence"] = t.stack(sentences, dim=1)
+                data["mask"] = t.stack(masks, dim=1)
+                data["type_ids"] = t.stack(type_ids, dim=1)
         return data
 
     def validate_logits(self, batch: BatchEncoding, logits: t.Tensor):
@@ -191,11 +347,28 @@ class CommonsenseQADataset:
         logits = logits.cpu().numpy()
         labels = np.argmax(logits, axis=1)
         ref_labels = batch["label"].cpu().numpy()
+
+        for i in range(labels.shape[0]):
+            answer = ["A", "B", "C", "D", "E"][labels[i]]
+            ref_answer = ["A", "B", "C", "D", "E"][batch["label"][i]]
+
+            tokens = batch["sentence"][i]
+            if tokens.dim() > 1:
+                sentences = [
+                    self.tokenizer.decode(t, skip_special_tokens=True) for t in tokens
+                ]
+                for i, sentence in enumerate(sentences):
+                    print(f"sentence {i}: [{sentence}] \n")
+            else:
+                sentence = self.tokenizer.decode(tokens, skip_special_tokens=True)
+                print(f"sentence {i}: [{sentence}] \n")
+            print(f"answer: [{answer}] \n" f"ref_answer: [{ref_answer}]")
+
         return {"accuracy": float(np.sum(labels == ref_labels)) / labels.shape[0]}
 
     def validate_tokens(self, batch: BatchEncoding, tokens: t.Tensor):
         """
-        For use with a classifier model
+        For use with a generator model
         """
         total = tokens.shape[0]
         correct = 0
@@ -219,11 +392,6 @@ class CommonsenseQADataset:
                 correct += 1
                 answers[batch["id"][i]] = True
             elif answer not in batch["choices"][i]:
-                print(
-                    f"sentence: [{sentence}] \n"
-                    f"wrong answer: [{answer}] \n"
-                    f"ref_answer: [{ref_answer}]"
-                )
                 if self.match_closest_when_no_equal:
                     # Gestalt Pattern Matching
                     # https://en.wikipedia.org/wiki/Gestalt_Pattern_Matching
@@ -239,12 +407,11 @@ class CommonsenseQADataset:
                         answers[batch["id"][i]] = True
                 else:
                     missing += 1
-            else:
-                print(
-                    f"sentence: [{sentence}] \n"
-                    f"wrong answer: [{answer}] \n"
-                    f"ref_answer: [{ref_answer}]"
-                )
+            print(
+                f"sentence: [{sentence}] \n"
+                f"answer: [{answer}] \n"
+                f"ref_answer: [{ref_answer}]"
+            )
 
         print(f"Missing ratio {float(missing) / total}")
         if self.match_closest_when_no_equal:
@@ -253,7 +420,7 @@ class CommonsenseQADataset:
         save_inspect_data(answers, "commensense_qa_val_answers")
         return {"accuracy": float(correct) / total}
 
-    def generate_test_results_logits(self, logits: t.Tensor, directory: str):
+    def generate_test_result_logits(self, logits: t.Tensor, directory: str):
         logits = logits.cpu().numpy()
         labels = np.argmax(logits, axis=1).tolist()
         with open_file_with_create_directories(
@@ -272,7 +439,7 @@ class CommonsenseQADataset:
                     )
                 )
 
-    def generate_test_results_tokens(self, tokens: t.Tensor, directory: str):
+    def generate_test_result_tokens(self, tokens: t.Tensor, directory: str):
         missing = 0
         with open_file_with_create_directories(
             os.path.join(directory, "commonsense_qa.jsonl"), "w"
@@ -304,65 +471,28 @@ class CommonsenseQADataset:
 
     def parse_data(self, path):
         data = []
-        sep = None
-        if (
-            hasattr(self.tokenizer, "sep_token")
-            and self.tokenizer.sep_token is not None
-        ):
-            # BERT, ALBERT, ROBERTA
-            sep = self.tokenizer.sep_token
-        elif (
-            hasattr(self.tokenizer, "eos_token")
-            and self.tokenizer.eos_token is not None
-        ):
-            sep = self.tokenizer.eos_token
+        logging.info(f"Parsing {path}")
         with open_file_with_create_directories(path, "r") as file:
             for line in file:
                 entry = json.loads(line)
                 if self.include_option_label_in_sentence:
-                    sentence_choices = self.generate_choice_str(
+                    text_choices = self.generate_choice_str(
                         [ch["text"] for ch in entry["question"]["choices"]]
                     )
                 else:
-                    sentence_choices = ", ".join(
+                    text_choices = ", ".join(
                         ch["text"] for ch in entry["question"]["choices"]
                     )
 
-                if sep is not None:
-                    org_sentence = (
-                        entry["question"]["stem"] + f" {sep} " + sentence_choices
-                    )
-                else:
-                    org_sentence = entry["question"]["stem"] + " " + sentence_choices
-                encoded_sentence = self.tokenizer(
-                    org_sentence,
-                    padding="max_length",
-                    max_length=self.max_seq_length,
-                    truncation=True,
-                    return_tensors="pt",
-                )
+                choices = [
+                    f"{ch['text'].lower().strip(',')}"
+                    for ch in entry["question"]["choices"]
+                ]
 
-                if self.include_option_label_in_answer_and_choices:
-                    choices = [
-                        f"({ch['label'].lower()}) {ch['text'].lower()}"
-                        for ch in entry["question"]["choices"]
-                    ]
-                elif self.use_option_label_as_answer_and_choices:
-                    choices = [
-                        f"({ch['label'].lower()})"
-                        for ch in entry["question"]["choices"]
-                    ]
-                else:
-                    choices = [
-                        ch["text"].lower() for ch in entry["question"]["choices"]
-                    ]
                 preprocessed = {
-                    "sentence": encoded_sentence.input_ids,
-                    "mask": encoded_sentence.attention_mask,
                     "text_question": entry["question"]["stem"],
-                    "text_choices": sentence_choices,
-                    # DEPRECATED, prepared for match by token, rank focus and exclude
-                    "question_match": [entry["question"]["question_concept"]],
+                    "text_choices": text_choices,
+                    "question_concept": entry["question"]["question_concept"],
                     "choices": choices,
                     "id": entry["id"],
                 }
@@ -376,48 +506,24 @@ class CommonsenseQADataset:
 
                     # For T5, use answer
                     if self.include_option_label_in_answer_and_choices:
-                        answer = [
-                            f"({ch['label'].lower()}) {ch['text'].lower()}"
+                        text_answer = [
+                            f"[{ch['label'].upper()}] {ch['text'].lower().strip(',')}"
                             for ch in entry["question"]["choices"]
                             if ch["label"] == entry["answerKey"]
                         ][0]
                     elif self.use_option_label_as_answer_and_choices:
-                        answer = [
-                            f"({ch['label'].lower()})"
+                        text_answer = [
+                            f"[{ch['label'].upper()}]"
                             for ch in entry["question"]["choices"]
                             if ch["label"] == entry["answerKey"]
                         ][0]
                     else:
-                        answer = [
-                            ch["text"].lower()
+                        text_answer = [
+                            ch["text"].lower().strip(",")
                             for ch in entry["question"]["choices"]
                             if ch["label"] == entry["answerKey"]
                         ][0]
-                    answer = self.tokenizer.encode(
-                        answer,
-                        padding="max_length",
-                        max_length=self.generate_length,
-                        truncation=True,
-                        return_tensors="pt",
-                    )
-                    # Use -100 to focus on training the answer part, rather than pad
-                    # tokens
-                    answer.masked_fill_(answer == self.tokenizer.pad_token_id, -100)
-                    preprocessed["answer"] = answer
-
-                    # DEPRECATED, prepared for match by token, rank focus and exclude
-                    preprocessed["answer_match"] = [
-                        ch["text"]
-                        for ch in entry["question"]["choices"]
-                        if ch["label"] == entry["answerKey"]
-                    ]
-
-                    # DEPRECATED, prepared for match by token, rank focus and exclude
-                    preprocessed["false_answers_match"] = [
-                        ch["text"]
-                        for ch in entry["question"]["choices"]
-                        if ch["label"] != entry["answerKey"]
-                    ]
+                    preprocessed["text_answer"] = text_answer
 
                 data.append(preprocessed)
         return data
@@ -429,8 +535,6 @@ class CommonsenseQADataset:
                     "train": self.train_data,
                     "validate": self.validate_data,
                     "test": self.test_data,
-                    "max_seq_length": self.max_seq_length,
-                    "generate_length": self.generate_length,
                     "include_option_label_in_sentence": self.include_option_label_in_sentence,
                     "include_option_label_in_answer_and_choices": self.include_option_label_in_answer_and_choices,
                     "use_option_label_as_answer_and_choices": self.use_option_label_as_answer_and_choices,
@@ -441,7 +545,7 @@ class CommonsenseQADataset:
     @staticmethod
     def generate_choice_str(choices: List[str]):
         result = ""
-        options = ["(A)", "(B)", "(C)", "(D)", "(E)"]
+        options = ["[A]", "[B]", "[C]", "[D]", "[E]"]
         for option, choice in zip(options, choices):
             result += option + " " + choice + " "
         return result

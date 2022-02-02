@@ -24,7 +24,7 @@ dataset = OpenBookQADataset(
         "question_select_max_edges": 3,
         "question_select_discard_edges_if_rank_below": "auto",
         "choices_match_max_times": 1000,
-        "choices_match_max_depth": 2,
+        "choices_match_max_depth": 1,
         "choices_match_edge_top_k": 10,
         "choices_match_source_context_range": 1,
         "choices_select_max_edges": 6,
@@ -119,9 +119,9 @@ def test_test(i):
 
 if __name__ == "__main__":
     # dataset.validate_data[0]["fact"] = "resource money"
-    # result = dataset.generator(432, "test")
-    # sentence = tokenizer.decode(result["sentence"][0], skip_special_tokens=True).lower()
-    # print(sentence)
+    result = dataset.generator(83, "validate")
+    sentence = tokenizer.decode(result["sentence"][0], skip_special_tokens=True).lower()
+    print(sentence)
 
     # with multiprocessing.Pool(processes=14) as pool:
     #     results = pool.map(test_train, list(range(len(dataset.train_dataset))))

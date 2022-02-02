@@ -54,6 +54,7 @@ class OpenBookQAWithSearchDataset:
         insert_answers_at_end: bool = False,
         match_closest_when_no_equal: bool = True,
         regenerate: bool = True,
+        output_mode: str = "single",
     ):
         self.tokenizer = tokenizer
         # Word piece is stabler for matching purpose
@@ -72,6 +73,10 @@ class OpenBookQAWithSearchDataset:
         )
         self.match_closest_when_no_equal = match_closest_when_no_equal
         self.regenerate = regenerate
+
+        if output_mode not in ("single", "splitted"):
+            raise ValueError(f"Invalid output_mode {output_mode}")
+        self.output_mode = output_mode
         self.matcher = OpenBookQAMatcher(tokenizer=self.matcher_tokenizer)
 
         openbook_qa_path = os.path.join(dataset_cache_dir, "openbook_qa")
@@ -117,9 +122,7 @@ class OpenBookQAWithSearchDataset:
             with open_file_with_create_directories(archive_path, "rb") as file:
                 data = pickle.load(file)
             if (
-                data["max_seq_length"] != self.max_seq_length
-                or data["generate_length"] != self.generate_length
-                or data["include_option_label_in_sentence"]
+                data["include_option_label_in_sentence"]
                 != self.include_option_label_in_sentence
                 or data["use_option_label_as_answer_and_choices"]
                 != self.use_option_label_as_answer_and_choices

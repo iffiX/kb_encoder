@@ -1,0 +1,46 @@
+{
+    "configs": [
+        {
+            "accumulate_grad_batches": 8,
+            "base_type": "microsoft/deberta-v2-xxlarge",
+            "model_configs": {
+                "choice_predictor_dropout_prob": 0.0,
+                "regularize_with_bce_loss": false
+            },
+            "batch_size": 2,
+            "epochs": 10,
+            "load_worker_num": 0,
+            "load_prefetch_per_worker": 2,
+            "l2_regularization": 0,
+            "learning_rate": 9e-6,
+            "scheduler_warmup_proportion": 0,
+            "load": false,
+            "max_seq_length": 50,
+            "optimizer_class": "AdamW",
+            "use_matcher": false,
+            "matcher_mode": "embedding",
+            "matcher_config": {
+                "question_match_max_times": 1000,
+                "question_match_max_depth": 2,
+                "question_match_edge_top_k": 10,
+                "question_match_source_context_range": 1,
+                "question_select_max_edges": 3,
+                "question_select_discard_edges_if_rank_below": "auto",
+                "choices_match_max_times": 1000,
+                "choices_match_max_depth": 1,
+                "choices_match_edge_top_k": 10,
+                "choices_match_source_context_range": 1,
+                "choices_select_max_edges": 2,
+                "choices_select_discard_edges_if_rank_below": "auto"
+            },
+            "seed": 697474,
+            "save": true
+        }
+    ],
+    "early_stopping_patience": 15,
+    "gpus": [0],
+    "stages": [
+        "openbook_qa"
+    ],
+    "working_directory": "/home/muhan/data/workspace/kb_encoder/train_ob_qa_deberta_v2_match"
+}
