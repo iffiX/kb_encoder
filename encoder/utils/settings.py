@@ -15,6 +15,7 @@ ROOT = "/home/muhan/data/workspace/kb_encoder"
 
 proxies = None
 huggingface_mirror = None
+local_files_only = False
 
 # kaggle_http_proxy = "http://localhost:1090"
 kaggle_http_proxy = None

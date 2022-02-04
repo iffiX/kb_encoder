@@ -9,7 +9,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import List
 from transformers import AutoModel
-from encoder.utils.settings import proxies, model_cache_dir, huggingface_mirror
+from encoder.utils.settings import (
+    proxies,
+    model_cache_dir,
+    huggingface_mirror,
+    local_files_only,
+)
 from .layers import ChoicePredictor, ChoiceClassifier
 from .perturbation import SmartPerturbation
 from .sift import SiFTAdversarialLearner, hook_sift_layer
@@ -57,6 +62,7 @@ class Model(nn.Module):
             proxies=proxies,
             mirror=huggingface_mirror,
             return_dict=True,
+            local_files_only=local_files_only,
         )
         if choice_predictor_type not in ("classifier", "predictor", "mixed"):
             raise ValueError(f"Invalid choice_predictor_type {choice_predictor_type}")

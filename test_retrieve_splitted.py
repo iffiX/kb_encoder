@@ -93,7 +93,7 @@ def test_test(i):
 
 if __name__ == "__main__":
     # dataset.validate_data[0]["fact"] = "resource money"
-    result = dataset.generator(1, "validate")
+    result = dataset.generator(498, "test")
     for i in range(4):
         sentence = tokenizer.decode(
             result["sentence"][0, i], skip_special_tokens=True

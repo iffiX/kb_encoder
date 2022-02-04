@@ -19,7 +19,12 @@ from encoder.model.deberta.model import Model
 from encoder.dataset.base import collate_function_dict_to_batch_encoding
 from encoder.dataset.openbook_qa import OpenBookQADataset
 from encoder.utils.config import OpenBookQATrainConfig, fix_missing
-from encoder.utils.settings import proxies, model_cache_dir, huggingface_mirror
+from encoder.utils.settings import (
+    proxies,
+    model_cache_dir,
+    huggingface_mirror,
+    local_files_only,
+)
 from encoder.utils.adafactor import Adafactor
 
 
@@ -44,6 +49,7 @@ class OpenBookQATrainer(pl.LightningModule):
             cache_dir=model_cache_dir,
             proxies=proxies,
             mirror=huggingface_mirror,
+            local_files_only=local_files_only,
         )
         self.dataset = OpenBookQADataset(
             tokenizer=self.tokenizer,
@@ -67,6 +73,7 @@ class OpenBookQATrainer(pl.LightningModule):
                 proxies=proxies,
                 mirror=huggingface_mirror,
                 return_dict=True,
+                local_files_only=local_files_only,
             )
         else:
             model_configs = config.model_configs or {}

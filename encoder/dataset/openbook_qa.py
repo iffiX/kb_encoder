@@ -16,6 +16,10 @@ from encoder.dataset.matcher.openbook_qa import OpenBookQAMatcher
 from encoder.utils.settings import (
     dataset_cache_dir,
     preprocess_cache_dir,
+    proxies,
+    model_cache_dir,
+    huggingface_mirror,
+    local_files_only,
 )
 from encoder.utils.file import (
     open_file_with_create_directories,
@@ -52,7 +56,13 @@ class OpenBookQADataset:
     ):
         self.tokenizer = tokenizer
         # Word piece is stabler for matching purpose
-        self.matcher_tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+        self.matcher_tokenizer = AutoTokenizer.from_pretrained(
+            "bert-base-uncased",
+            cache_dir=model_cache_dir,
+            proxies=proxies,
+            mirror=huggingface_mirror,
+            local_files_only=local_files_only,
+        )
         self.max_seq_length = max_seq_length
         self.generate_length = generate_length
         self.use_matcher = use_matcher
@@ -174,23 +184,27 @@ class OpenBookQADataset:
                 if self.matcher_mode == "embedding":
                     wnl = WordNetLemmatizer()
 
-                    tokens = nltk.word_tokenize(data["fact"])
-                    allowed_tokens = []
-                    tagged = nltk.pos_tag(tokens)
-                    for token, pos in tagged:
-                        if (
-                            pos.startswith("NN")
-                            # or pos.startswith("JJ")
-                            # or (
-                            #     pos.startswith("VB")
-                            #     and token not in self.matcher.VERB_FILTER_SET
-                            # )
-                        ):
-                            allowed_tokens.append(wnl.lemmatize(token))
-                    if len(allowed_tokens) < 3:
+                    if len(data["target"]) > 0:
+                        # For supporting manually setting search targets
+                        allowed_tokens = data["target"]
+                    else:
+                        tokens = nltk.word_tokenize(data["fact"])
+                        allowed_tokens = []
+                        tagged = nltk.pos_tag(tokens)
                         for token, pos in tagged:
-                            if pos.startswith("JJ"):
+                            if (
+                                pos.startswith("NN")
+                                # or pos.startswith("JJ")
+                                # or (
+                                #     pos.startswith("VB")
+                                #     and token not in self.matcher.VERB_FILTER_SET
+                                # )
+                            ):
                                 allowed_tokens.append(wnl.lemmatize(token))
+                        if len(allowed_tokens) < 3:
+                            for token, pos in tagged:
+                                if pos.startswith("JJ"):
+                                    allowed_tokens.append(wnl.lemmatize(token))
 
                     # target = (
                     #     " ".join(sorted(list(set(allowed_tokens))))
@@ -230,8 +244,6 @@ class OpenBookQADataset:
                     new_question = self.matcher.insert_selection(
                         data["text_question"], selection, insert_at_end=True,
                     )
-
-                    # new_question = data["text_question"] + f" ({data['fact']}) "
 
                     choice_mask = "+" * len(data["text_choices"])
                     for choice in ("[A]", "[B]", "[C]", "[D]"):
@@ -317,24 +329,28 @@ class OpenBookQADataset:
                 if self.matcher_mode == "embedding":
                     wnl = WordNetLemmatizer()
 
-                    tokens = nltk.word_tokenize(data["fact"])
-                    allowed_tokens = []
-                    tagged = nltk.pos_tag(tokens)
-                    for token, pos in tagged:
-                        if (
-                            pos.startswith("NN")
-                            # or pos.startswith("JJ")
-                            # or (
-                            #     pos.startswith("VB")
-                            #     and token not in self.matcher.VERB_FILTER_SET
-                            # )
-                        ):
-                            allowed_tokens.append(wnl.lemmatize(token))
-
-                    if len(allowed_tokens) < 3:
+                    if len(data["target"]) > 0:
+                        # For supporting manually setting search targets
+                        allowed_tokens = data["target"]
+                    else:
+                        tokens = nltk.word_tokenize(data["fact"])
+                        allowed_tokens = []
+                        tagged = nltk.pos_tag(tokens)
                         for token, pos in tagged:
-                            if pos.startswith("JJ"):
+                            if (
+                                pos.startswith("NN")
+                                # or pos.startswith("JJ")
+                                # or (
+                                #     pos.startswith("VB")
+                                #     and token not in self.matcher.VERB_FILTER_SET
+                                # )
+                            ):
                                 allowed_tokens.append(wnl.lemmatize(token))
+
+                        if len(allowed_tokens) < 3:
+                            for token, pos in tagged:
+                                if pos.startswith("JJ"):
+                                    allowed_tokens.append(wnl.lemmatize(token))
 
                     # target = (
                     #     " ".join(sorted(list(set(allowed_tokens))))
@@ -613,6 +629,7 @@ class OpenBookQADataset:
                     "text_question": entry["question"]["stem"].lower() + "?",
                     "text_choices": text_choices,
                     "fact": entry["fact1"],
+                    "target": [],
                     "choices": choices,
                     "id": entry["id"],
                 }
@@ -697,6 +714,7 @@ class OpenBookQADataset:
                 ),
                 "text_choices": self.generate_choice_str(choices),
                 "fact": "month week day",
+                "target": [],
                 "choices": choices,
                 "id": f"gen-ar-time-{i}",
                 "label": 0,
@@ -760,6 +778,7 @@ class OpenBookQADataset:
                 ),
                 "text_choices": self.generate_choice_str(choices),
                 "fact": "month week day",
+                "target": [],
                 "choices": choices,
                 "id": f"gen-ar-timeconv-{i}",
                 "label": 0,

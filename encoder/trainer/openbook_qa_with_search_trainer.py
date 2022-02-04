@@ -12,7 +12,12 @@ from .openbook_qa_trainer import OpenBookQATrainer
 from encoder.dataset.base import collate_function_dict_to_batch_encoding
 from encoder.dataset.openbook_qa_with_search import OpenBookQAWithSearchDataset
 from encoder.utils.config import OpenBookQAWithSearchTrainConfig, fix_missing
-from encoder.utils.settings import proxies, model_cache_dir, huggingface_mirror
+from encoder.utils.settings import (
+    proxies,
+    model_cache_dir,
+    huggingface_mirror,
+    local_files_only,
+)
 from encoder.utils.adafactor import Adafactor
 
 
@@ -37,18 +42,26 @@ class OpenBookQAWithSearchTrainer(pl.LightningModule):
             cache_dir=model_cache_dir,
             proxies=proxies,
             mirror=huggingface_mirror,
+            local_files_only=local_files_only,
         )
+        qa_trainer = OpenBookQATrainer.load_from_checkpoint(config.qa_checkpoint_path)
+        qa_config = qa_trainer.config
         self.dataset = OpenBookQAWithSearchDataset(
-            tokenizer=self.tokenizer,
-            max_seq_length=config.max_seq_length,
-            generate_length=config.generate_length,
-            use_matcher=config.use_matcher,
-            matcher_mode=config.matcher_mode,
-            matcher_seed=config.seed,
-            matcher_config=config.matcher_config,
-            include_option_label_in_sentence=config.include_option_label_in_sentence,
-            use_option_label_as_answer_and_choices=config.use_option_label_as_answer_and_choices,
-            match_closest_when_no_equal=config.match_closest_when_no_equal,
+            tokenizer=qa_trainer.tokenizer,
+            search_tokenizer=self.tokenizer,
+            max_seq_length=qa_config.max_seq_length,
+            generate_length=qa_config.generate_length,
+            use_matcher=qa_config.use_matcher,
+            matcher_mode=qa_config.matcher_mode,
+            matcher_seed=qa_config.seed,
+            matcher_config=qa_config.matcher_config,
+            include_option_label_in_sentence=qa_config.include_option_label_in_sentence,
+            include_option_label_in_answer_and_choices=qa_config.include_option_label_in_answer_and_choices,
+            use_option_label_as_answer_and_choices=qa_config.use_option_label_as_answer_and_choices,
+            match_closest_when_no_equal=qa_config.match_closest_when_no_equal,
+            output_mode="single"
+            if qa_config.base_type.startswith("t5")
+            else "splitted",
         )
         self.model = T5ForConditionalGeneration.from_pretrained(
             config.base_type,
@@ -56,19 +69,23 @@ class OpenBookQAWithSearchTrainer(pl.LightningModule):
             proxies=proxies,
             mirror=huggingface_mirror,
             return_dict=True,
+            local_files_only=local_files_only,
         )
-        self.qa_model = OpenBookQATrainer.load_from_checkpoint(
-            config.qa_checkpoint_path
-        ).model
-        self.real_device = None
+        self.qa_model_type = qa_config.base_type
+        self.qa_model = qa_trainer.model
+        self._real_device = None
 
     @property
     def monitor(self):
-        return "qa_accuracy"
+        return "test_qa_accuracy"
 
     @property
     def monitor_mode(self):
         return "max"
+
+    @property
+    def real_device(self):
+        return self._real_device or self.device
 
     def train_dataloader(self):
         search_loader = DataLoader(
@@ -82,32 +99,31 @@ class OpenBookQAWithSearchTrainer(pl.LightningModule):
         return search_loader
 
     def val_dataloader(self):
-        # qa_loader = DataLoader(
-        #     dataset=self.dataset.validate_qa_dataset,
-        #     num_workers=self.config.load_worker_num,
-        #     prefetch_factor=self.config.load_prefetch_per_worker,
-        #     batch_size=self.config.batch_size,
-        #     collate_fn=collate_function_dict_to_batch_encoding,
-        #     worker_init_fn=set_worker_sharing_strategy,
-        # )
-        # search_loader = DataLoader(
-        #     dataset=self.dataset.validate_search_dataset,
-        #     num_workers=self.config.load_worker_num,
-        #     prefetch_factor=self.config.load_prefetch_per_worker,
-        #     batch_size=self.config.batch_size,
-        #     collate_fn=collate_function_dict_to_batch_encoding,
-        #     worker_init_fn=set_worker_sharing_strategy,
-        # )
-        # return [search_loader, qa_loader]
-        qa_loader = DataLoader(
-            dataset=self.dataset.test_qa_dataset,
+        qa_loader_val = DataLoader(
+            dataset=self.dataset.validate_dataset,
             num_workers=self.config.load_worker_num,
             prefetch_factor=self.config.load_prefetch_per_worker,
             batch_size=self.config.batch_size,
             collate_fn=collate_function_dict_to_batch_encoding,
             worker_init_fn=set_worker_sharing_strategy,
         )
-        search_loader = DataLoader(
+        search_loader_val = DataLoader(
+            dataset=self.dataset.validate_search_dataset,
+            num_workers=self.config.load_worker_num,
+            prefetch_factor=self.config.load_prefetch_per_worker,
+            batch_size=self.config.batch_size,
+            collate_fn=collate_function_dict_to_batch_encoding,
+            worker_init_fn=set_worker_sharing_strategy,
+        )
+        qa_loader_test = DataLoader(
+            dataset=self.dataset.test_dataset,
+            num_workers=self.config.load_worker_num,
+            prefetch_factor=self.config.load_prefetch_per_worker,
+            batch_size=self.config.batch_size,
+            collate_fn=collate_function_dict_to_batch_encoding,
+            worker_init_fn=set_worker_sharing_strategy,
+        )
+        search_loader_test = DataLoader(
             dataset=self.dataset.test_search_dataset,
             num_workers=self.config.load_worker_num,
             prefetch_factor=self.config.load_prefetch_per_worker,
@@ -115,11 +131,11 @@ class OpenBookQAWithSearchTrainer(pl.LightningModule):
             collate_fn=collate_function_dict_to_batch_encoding,
             worker_init_fn=set_worker_sharing_strategy,
         )
-        return [search_loader, qa_loader]
+        return [search_loader_val, search_loader_test, qa_loader_val, qa_loader_test]
 
     def test_dataloader(self):
         qa_loader = DataLoader(
-            dataset=self.dataset.test_qa_dataset,
+            dataset=self.dataset.test_dataset,
             num_workers=self.config.load_worker_num,
             prefetch_factor=self.config.load_prefetch_per_worker,
             batch_size=self.config.batch_size,
@@ -147,56 +163,76 @@ class OpenBookQAWithSearchTrainer(pl.LightningModule):
                 0
             ]
             # replace device property
-            self.real_device = f"cuda:{start_device_id}"
+            self._real_device = f"cuda:{start_device_id}"
             self.model.parallelize(self.config.device_map)
         else:
-            self.real_device = None
+            self._real_device = None
 
     # noinspection PyTypeChecker
     def training_step(self, batch: BatchEncoding, batch_idx):
         # answer shape [batch_size, sequence_length]
         out = self.model(
-            input_ids=batch["sentence"].to(self.real_device or self.device),
-            attention_mask=batch["mask"].to(self.real_device or self.device),
-            labels=batch["answer"].to(self.real_device or self.device),
+            input_ids=batch["sentence"].to(self.real_device),
+            attention_mask=batch["mask"].to(self.real_device),
+            labels=batch["answer"].to(self.real_device),
         )
         self.log("search_loss", out.loss, prog_bar=True, on_step=True)
         return out.loss
 
     # noinspection PyTypeChecker
     def validation_step(self, batch: BatchEncoding, _batch_idx, dataloader_idx):
-        if dataloader_idx == 0:
+        if dataloader_idx in (0, 1):
             out = self.model.generate(
-                batch["sentence"].to(self.real_device or self.device),
+                batch["sentence"].to(self.real_device),
                 max_length=self.config.generate_length,
-                attention_mask=batch["mask"].to(self.real_device or self.device),
+                attention_mask=batch["mask"].to(self.real_device),
                 early_stopping=True,
                 num_beams=5,
             )
-        else:
-            out = self.qa_model.generate(
-                batch["sentence"].to(self.real_device or self.device),
-                max_length=self.config.generate_length,
-                attention_mask=batch["mask"].to(self.real_device or self.device),
-                early_stopping=True,
+            result = t.full(
+                [out.shape[0], self.config.generate_length], self.tokenizer.pad_token_id
             )
-        result = t.full(
-            [out.shape[0], self.config.generate_length], self.tokenizer.pad_token_id
-        )
-        result[:, : out.shape[1]] = out.cpu()
-        batch = batch.to("cpu")
-        if dataloader_idx == 0:
+            result[:, : out.shape[1]] = out.cpu()
+            batch = batch.to("cpu")
             for res, id in zip(result, batch["id"]):
-                # self.dataset.set_search_target(res, "validate", id)
-                self.dataset.set_search_target(res, "test", id)
-        return {
-            "batch": batch,
-            "tokens": result,
-        }
+                self.dataset.set_search_target(
+                    res, "test" if dataloader_idx == 1 else "validate", id
+                )
+            return {
+                "batch": batch,
+                "result": result,
+            }
+        else:
+            if self.qa_model_type.startswith("t5"):
+                out = self.qa_model.generate(
+                    batch["sentence"].to(self.real_device),
+                    max_length=self.config.generate_length,
+                    attention_mask=batch["mask"].to(self.real_device),
+                    early_stopping=True,
+                )
+                result = t.full(
+                    [out.shape[0], self.config.generate_length],
+                    self.tokenizer.pad_token_id,
+                )
+                result[:, : out.shape[1]] = out.cpu()
+                batch = batch.to("cpu")
+                return {
+                    "batch": batch,
+                    "result": result,
+                }
+            else:
+                return {
+                    "batch": batch.to("cpu"),
+                    "result": self.qa_model.predict(
+                        input_ids=batch["sentence"].to(self.real_device),
+                        attention_mask=batch["mask"].to(self.real_device),
+                        token_type_ids=batch["type_ids"].to(self.real_device),
+                    ).cpu(),
+                }
 
     def validation_epoch_end(self, outputs):
         if self.is_distributed:
-            t.cuda.set_device(self.real_device or self.device)
+            t.cuda.set_device(self.real_device)
             gathered_outputs = [None] * get_world_size()
             all_gather_object(gathered_outputs, outputs)
             gathered_outputs = list(itertools.chain.from_iterable(gathered_outputs))
@@ -205,55 +241,81 @@ class OpenBookQAWithSearchTrainer(pl.LightningModule):
             self.validate_on_every_process(outputs)
 
     def validate_on_every_process(self, outputs):
-        search_batch, search_tokens = collate_and_filter_outputs(outputs[0])
-        search_metrics = self.dataset.validate_search(search_batch, search_tokens)
-        qa_batch, qa_tokens = collate_and_filter_outputs(outputs[1])
-        # qa_metrics = self.dataset.validate_qa(qa_batch, qa_tokens)
-        qa_metrics = self.dataset.test_qa(qa_batch, qa_tokens)
+        for prefix, dataloader_idx in (("val", 0), ("test", 1)):
+            search_batch, search_tokens = collate_and_filter_outputs(
+                outputs[dataloader_idx]
+            )
+            search_metrics = self.dataset.validate_search(search_batch, search_tokens)
+            qa_batch, qa_result = collate_and_filter_outputs(
+                outputs[dataloader_idx + 2]
+            )
+            if self.qa_model_type.startswith("t5"):
+                qa_metrics = self.dataset.validate_tokens(qa_batch, qa_result)
+            else:
+                qa_metrics = self.dataset.validate_logits(qa_batch, qa_result)
 
-        for key, value in search_metrics.items():
-            self.log("search_" + key, value, prog_bar=True, sync_dist=True)
-        for key, value in qa_metrics.items():
-            self.log("qa_" + key, value, prog_bar=True, sync_dist=True)
-        if not self.is_distributed or get_rank() == 0:
-            print("Validation result:")
             for key, value in search_metrics.items():
-                print(f"search_{key}: {value}")
+                self.log(f"{prefix}_search_{key}", value, prog_bar=True, sync_dist=True)
             for key, value in qa_metrics.items():
-                print(f"qa_{key}: {value}")
+                self.log(f"{prefix}_qa_{key}", value, prog_bar=True, sync_dist=True)
+            if not self.is_distributed or get_rank() == 0:
+                print("Validation result:")
+                for key, value in search_metrics.items():
+                    print(f"{prefix}_search_{key}: {value}")
+                for key, value in qa_metrics.items():
+                    print(f"{prefix}_qa_{key}: {value}")
 
     def test_step(self, batch: BatchEncoding, _batch_idx, dataloader_idx):
         if dataloader_idx == 0:
             out = self.model.generate(
-                batch["sentence"].to(self.real_device or self.device),
+                batch["sentence"].to(self.real_device),
                 max_length=self.config.generate_length,
-                attention_mask=batch["mask"].to(self.real_device or self.device),
+                attention_mask=batch["mask"].to(self.real_device),
                 early_stopping=True,
                 num_beams=5,
             )
-        else:
-            out = self.qa_model.generate(
-                batch["sentence"].to(self.real_device or self.device),
-                max_length=self.config.generate_length,
-                attention_mask=batch["mask"].to(self.real_device or self.device),
-                early_stopping=True,
+            result = t.full(
+                [out.shape[0], self.config.generate_length], self.tokenizer.pad_token_id
             )
-        result = t.full(
-            [out.shape[0], self.config.generate_length], self.tokenizer.pad_token_id
-        )
-        result[:, : out.shape[1]] = out.cpu()
-        batch = batch.to("cpu")
-        if dataloader_idx == 0:
+            result[:, : out.shape[1]] = out.cpu()
+            batch = batch.to("cpu")
             for res, id in zip(result, batch["id"]):
                 self.dataset.set_search_target(res, "test", id)
-        return {
-            "batch": batch,
-            "tokens": result,
-        }
+            return {
+                "batch": batch,
+                "result": result,
+            }
+        else:
+            if self.qa_model_type.startswith("t5"):
+                out = self.qa_model.generate(
+                    batch["sentence"].to(self.real_device),
+                    max_length=self.config.generate_length,
+                    attention_mask=batch["mask"].to(self.real_device),
+                    early_stopping=True,
+                )
+                result = t.full(
+                    [out.shape[0], self.config.generate_length],
+                    self.tokenizer.pad_token_id,
+                )
+                result[:, : out.shape[1]] = out.cpu()
+                batch = batch.to("cpu")
+                return {
+                    "batch": batch,
+                    "result": result,
+                }
+            else:
+                return {
+                    "batch": batch.to("cpu"),
+                    "result": self.qa_model.predict(
+                        input_ids=batch["sentence"].to(self.real_device),
+                        attention_mask=batch["mask"].to(self.real_device),
+                        token_type_ids=batch["type_ids"].to(self.real_device),
+                    ).cpu(),
+                }
 
     def test_epoch_end(self, outputs):
         if self.is_distributed:
-            t.cuda.set_device(self.real_device or self.device)
+            t.cuda.set_device(self.real_device)
             gathered_outputs = [None] * get_world_size()
             all_gather_object(gathered_outputs, outputs)
             gathered_outputs = list(itertools.chain.from_iterable(gathered_outputs))
@@ -263,10 +325,11 @@ class OpenBookQAWithSearchTrainer(pl.LightningModule):
 
     @rank_zero_only
     def test_on_main_process(self, outputs):
-        qa_batch, qa_tokens = collate_and_filter_outputs(outputs[1])
-        result = self.dataset.test_qa(qa_batch, qa_tokens)
-        print(f"Test accuracy: {result['accuracy']}")
-        self.dataset.generate_test_results(qa_tokens, self.stage_result_path)
+        _, result = collate_and_filter_outputs(outputs[1])
+        if self.qa_model_type.startswith("t5"):
+            self.dataset.generate_test_result_tokens(result, self.stage_result_path)
+        else:
+            self.dataset.generate_test_result_logits(result, self.stage_result_path)
 
     def configure_optimizers(self):
         if self.config.optimizer_class == "Adafactor":
