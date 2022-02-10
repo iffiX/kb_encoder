@@ -12,10 +12,16 @@ def set_worker_sharing_strategy(_worker_id: int) -> None:
 
 def collate_and_filter_outputs(outputs):
     batch = collate_function_dict_to_batch_encoding([o["batch"] for o in outputs])
-    results = t.cat([o["result"] for o in outputs], dim=0)
-    list_of_results = [
-        (b["id"][0], b, to.unsqueeze(0)) for b, to in zip(dict_iter(batch), results)
-    ]
+    if t.is_tensor(outputs[0]["result"]):
+        results = t.cat([o["result"] for o in outputs], dim=0)
+        list_of_results = [
+            (b["id"][0], b, to.unsqueeze(0)) for b, to in zip(dict_iter(batch), results)
+        ]
+    else:
+        results = [r for o in outputs for r in o["result"]]
+        list_of_results = [
+            (b["id"][0], b, li) for b, li in zip(dict_iter(batch), results)
+        ]
     # filter duplicates brought by resetting dataset
     existed = {}
     filtered = []
@@ -24,7 +30,10 @@ def collate_and_filter_outputs(outputs):
             filtered.append(lr)
             existed[lr[0]] = True
     list_of_results = filtered
-    results = t.cat([lr[2] for lr in list_of_results], dim=0)
+    if t.is_tensor(list_of_results[0][2]):
+        results = t.cat([lr[2] for lr in list_of_results], dim=0)
+    else:
+        results = [lr[2] for lr in list_of_results]
     batch = collate_function_dict_to_batch_encoding([lr[1] for lr in list_of_results])
     return batch, results
 

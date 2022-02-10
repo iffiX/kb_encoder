@@ -147,6 +147,10 @@ class OpenBookQADataset:
                 self.validate_data = data["validate"]
                 self.test_data = data["test"]
 
+        self.original_train_data = copy.deepcopy(self.train_data)
+        self.original_validate_data = copy.deepcopy(self.validate_data)
+        self.original_test_data = copy.deepcopy(self.test_data)
+
         if output_mode == "splitted":
             self.normalize_training_data()
 

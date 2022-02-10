@@ -1,16 +1,12 @@
-import os
 import copy
 import nltk
-import torch as t
-import numpy as np
 from nltk.stem import WordNetLemmatizer
 from transformers import PreTrainedTokenizerBase, BatchEncoding
-from encoder.utils.settings import dataset_cache_dir
 from .base import StaticIterableDataset
 from .openbook_qa import OpenBookQADataset
 
 
-class OpenBookQAWithSearchDataset(OpenBookQADataset):
+class OpenBookQAKeywordsDataset(OpenBookQADataset):
     def __init__(
         self,
         tokenizer: PreTrainedTokenizerBase,
@@ -29,7 +25,7 @@ class OpenBookQAWithSearchDataset(OpenBookQADataset):
         regenerate: bool = True,
         output_mode: str = "single",
     ):
-        super(OpenBookQAWithSearchDataset, self).__init__(
+        super(OpenBookQAKeywordsDataset, self).__init__(
             tokenizer=tokenizer,
             max_seq_length=max_seq_length,
             generate_length=generate_length,
@@ -46,25 +42,23 @@ class OpenBookQAWithSearchDataset(OpenBookQADataset):
             output_mode=output_mode,
         )
         self.search_tokenizer = search_tokenizer
-        self.keywords_list, self.keywords_idf = self.get_keywords_list_and_idf()
-        self.average_idf = np.mean(list(self.keywords_idf.values()))
 
     @property
     def train_search_dataset(self):
         return StaticIterableDataset(
-            len(self.train_data), self.search_generator, ("train",),
+            len(self.original_train_data), self.search_generator, ("train",),
         )
 
     @property
     def validate_search_dataset(self):
         return StaticIterableDataset(
-            len(self.validate_data), self.search_generator, ("validate",)
+            len(self.original_validate_data), self.search_generator, ("validate",)
         )
 
     @property
     def test_search_dataset(self):
         return StaticIterableDataset(
-            len(self.test_data), self.search_generator, ("test",)
+            len(self.original_test_data), self.search_generator, ("test",)
         )
 
     def generator(self, index: int, split: str):
@@ -77,11 +71,11 @@ class OpenBookQAWithSearchDataset(OpenBookQADataset):
 
         if data is not None and len(data["target"]) == 0:
             raise ValueError(f"Set search targets for data {split}-{data['id']} first")
-        return super(OpenBookQAWithSearchDataset, self).generator(index, split)
+        return super(OpenBookQAKeywordsDataset, self).generator(index, split)
 
     def search_generator(self, index: int, split: str):
         if split == "train":
-            data = self.train_data[index]
+            data = self.original_train_data[index]
         elif split == "validate":
             data = self.validate_data[index]
         elif split == "test":
@@ -138,42 +132,26 @@ class OpenBookQAWithSearchDataset(OpenBookQADataset):
             truncation=True,
             return_tensors="pt",
         )
-        answer = self.search_tokenizer.encode(
-            " ".join(self.get_gold_search_target(data["fact"])),
-            padding="max_length",
-            max_length=32,
-            truncation=True,
-            return_tensors="pt",
-        )
-        # Use -100 to focus on training the answer part, rather than pad
-        # tokens
-        answer.masked_fill_(answer == self.search_tokenizer.pad_token_id, -100)
 
         data["sentence"] = encoded_sentence.input_ids
         data["mask"] = encoded_sentence.attention_mask
-        data["answer"] = answer
+        data["type_ids"] = encoded_sentence.token_type_ids
+        data["answer"] = self.get_gold_search_target(data["fact"])
         return data
 
-    def validate_search(self, batch: BatchEncoding, tokens: t.Tensor):
-        total = tokens.shape[0]
+    def validate_search(self, batch: BatchEncoding, keywords_list):
+        total = len(keywords_list)
         total_f1 = 0
-        for i in range(tokens.shape[0]):
-            answer = self.search_tokenizer.decode(tokens[i], skip_special_tokens=True)
-            ref_answer_tensor = batch["answer"][i]
-            ref_answer_tensor.masked_fill_(
-                ref_answer_tensor == -100, self.search_tokenizer.pad_token_id
-            )
-            ref_answer = self.search_tokenizer.decode(
-                ref_answer_tensor, skip_special_tokens=True
-            )
+        for i in range(len(keywords_list)):
+            answer = keywords_list[i]
+            ref_answer = batch["answer"][i]
+
             sentence = self.search_tokenizer.decode(
                 batch["sentence"][i], skip_special_tokens=True,
             )
 
-            keywords = set(
-                self.find_closest_keywords(nltk.word_tokenize(answer.lower()))
-            )
-            ref_keywords = set(nltk.word_tokenize(ref_answer.lower()))
+            keywords = set(answer)
+            ref_keywords = set(ref_answer)
             intersection = ref_keywords.intersection(keywords)
 
             if len(ref_keywords) == 0:
@@ -193,31 +171,20 @@ class OpenBookQAWithSearchDataset(OpenBookQADataset):
 
         return {"f1": total_f1 / total}
 
-    def set_search_target(self, tokens: t.Tensor, split: str, id):
+    def set_search_target(self, keywords, split: str, id):
         if split == "validate":
             split_data = self.validate_data
         elif split == "test":
             split_data = self.test_data
         else:
             raise ValueError(f"Invalid split: {split}")
-        if tokens.ndim != 1:
-            raise ValueError("Token tensor must have a dimension number of 1")
+
         found_data = [d for d in split_data if d["id"] == id]
         if len(found_data) != 1:
             raise ValueError(f"Id {id} not found in split {split}")
-        raw_search_target = self.search_tokenizer.decode(
-            tokens, skip_special_tokens=True
-        )
-        print(f"Search target of [{split}-{id}]: {raw_search_target}")
-        search_target = sorted(
-            list(
-                set(
-                    self.find_closest_keywords(
-                        nltk.word_tokenize(raw_search_target.lower())
-                    )
-                )
-            )
-        )
+
+        print(f"Search target of [{split}-{id}]: {keywords}")
+        search_target = keywords
         # prevent raising an exception since sometimes the target may be empty
         if len(search_target) == 0:
             search_target.append("")
@@ -238,44 +205,3 @@ class OpenBookQAWithSearchDataset(OpenBookQADataset):
                     allowed_tokens.append(wnl.lemmatize(token))
         search_target = sorted(list(set(allowed_tokens)))
         return search_target
-
-    def get_keywords_list_and_idf(self):
-        openbook_qa_path = os.path.join(
-            dataset_cache_dir,
-            "openbook_qa",
-            "OpenBookQA-V1-Sep2018",
-            "Data",
-            "Main",
-            "openbook.txt",
-        )
-        keywords_list = []
-        with open(openbook_qa_path, "r") as file:
-            for line in file:
-                fact = line.strip("\n").strip(".").strip('"').strip("'").strip(",")
-                keywords_list.append(self.get_gold_search_target(fact))
-        keywords = set([k for kl in keywords_list for k in kl])
-
-        keywords_idf = {}
-        for k in keywords:
-            keywords_idf[k] = np.log(
-                len(keywords_list)
-                / (1 + sum(1 if k in kl else 0 for kl in keywords_list))
-            )
-        return keywords_list, keywords_idf
-
-    def find_closest_keywords(self, keywords):
-        scores = []
-        keywords = set(keywords)
-        for kl in self.keywords_list:
-            kl = set(kl)
-            overlap_score = sum(self.keywords_idf[k] for k in kl.intersection(keywords))
-            coverage_loss = sum(
-                self.keywords_idf.get(k, self.average_idf)
-                for k in keywords.difference(kl)
-            )
-            risk_loss = sum(self.keywords_idf[k] for k in kl.difference(keywords))
-            score = overlap_score / (overlap_score + coverage_loss + risk_loss + 1e-6)
-            scores.append(score)
-        chosen_idx = np.argmax(scores)
-        print(f"{keywords}, closest {self.keywords_list[chosen_idx]}")
-        return self.keywords_list[chosen_idx]
