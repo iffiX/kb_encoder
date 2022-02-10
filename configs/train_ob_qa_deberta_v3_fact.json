@@ -14,7 +14,7 @@
             "l2_regularization": 0,
             "learning_rate": 5e-6,
             "load": false,
-            "qa_checkpoint_path": "/home/muhan/data/workspace/kb_encoder/train_ob_qa_deberta_v3_match/0/checkpoint/epoch=16-test_accuracy-test_accuracy=0.900.ckpt",
+            "qa_checkpoint_path": "/home/muhan/data/workspace/kb_encoder/train_ob_qa_deberta_v3_match_vat/0/checkpoint/epoch=08-test_accuracy-test_accuracy=0.904.ckpt",
             "optimizer_class": "AdamW",
             "use_matcher": true,
             "matcher_mode": "embedding",
