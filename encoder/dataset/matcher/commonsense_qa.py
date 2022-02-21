@@ -86,7 +86,7 @@ class CommonsenseQAMatcher(BaseMatcher):
                 "DerivedFrom",
                 "EtymologicallyDerivedFrom",
                 "EtymologicallyRelatedTo",
-                "RelatedTo",
+                # "RelatedTo",
                 # "FormOf",
             ]
         )
@@ -186,36 +186,36 @@ class CommonsenseQAMatcher(BaseMatcher):
     #                 ids, mask = self.tokenize_and_mask(line)
     #                 self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
     #     logging.info(f"Added {count} composite nodes")
-    #
-    # def add_wordnet_definition(self):
-    #     logging.info("Adding wordnet definition")
-    #     added = set()
-    #     for ss in wordnet.all_synsets():
-    #         s = [ln.replace("_", " ").lower() for ln in ss.lemma_names()]
-    #         if s[0].count(" ") > 0:
-    #             continue
-    #         definition = (
-    #             ss.definition()
-    #             .replace("(", ",")
-    #             .replace(")", ",")
-    #             .replace(";", ",")
-    #             .replace('"', " ")
-    #             .lower()
-    #         )
-    #         # knowledge = f"{','.join(s)} is defined as {definition}"
-    #         knowledge = f"{s[0]} is defined as {definition}"
-    #
-    #         if len(knowledge) > 100:
-    #             # if trim_index = -1 this will also work, but not trimming anything
-    #             trim_index = knowledge.find(" ", 100)
-    #             knowledge = knowledge[:trim_index]
-    #         if knowledge not in added:
-    #             added.add(knowledge)
-    #             # Only allow definition part to be matched
-    #             sentence_mask = "+" * len(s[0]) + "-" * (len(knowledge) - len(s[0]))
-    #             ids, mask = self.tokenize_and_mask(knowledge, sentence_mask)
-    #             self.matcher.kb.add_composite_node(knowledge, "RelatedTo", ids, mask)
-    #     logging.info(f"Added {len(added)} composite nodes")
+
+    def add_wordnet_definition(self):
+        logging.info("Adding wordnet definition")
+        added = set()
+        for ss in wordnet.all_synsets():
+            s = [ln.replace("_", " ").lower() for ln in ss.lemma_names()]
+            if s[0].count(" ") > 0:
+                continue
+            definition = (
+                ss.definition()
+                .replace("(", ",")
+                .replace(")", ",")
+                .replace(";", ",")
+                .replace('"', " ")
+                .lower()
+            )
+            # knowledge = f"{','.join(s)} is defined as {definition}"
+            knowledge = f"{s[0]} is defined as {definition}"
+
+            if len(knowledge) > 100:
+                # if trim_index = -1 this will also work, but not trimming anything
+                trim_index = knowledge.find(" ", 100)
+                knowledge = knowledge[:trim_index]
+            if knowledge not in added:
+                added.add(knowledge)
+                # Only allow definition part to be matched
+                sentence_mask = "+" * len(s[0]) + "-" * (len(knowledge) - len(s[0]))
+                ids, mask = self.tokenize_and_mask(knowledge, sentence_mask)
+                self.matcher.kb.add_composite_node(knowledge, "RelatedTo", ids, mask)
+        logging.info(f"Added {len(added)} composite nodes")
 
     def __reduce__(self):
         return CommonsenseQAMatcher, (self.tokenizer,)
