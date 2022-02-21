@@ -1,7 +1,7 @@
 {
     "configs": [
         {
-            "accumulate_grad_batches": 2,
+            "accumulate_grad_batches": 8,
             "base_type": "microsoft/deberta-v3-large",
             "model_configs": {
                 "choice_predictor_dropout_prob": 0.0,
@@ -18,31 +18,31 @@
                     "adv_loss": "SymKlCriterion"
                 }
             },
-            "batch_size": 8,
-            "epochs": 10,
+            "search_negative_samples": 15,
+            "batch_size": 2,
+            "epochs": 20,
             "load_worker_num": 16,
             "load_prefetch_per_worker": 8,
             "l2_regularization": 0,
-            "learning_rate": 6e-6,
-            "scheduler_warmup_proportion": 0.1,
+            "learning_rate": 5e-6,
             "load": false,
-            "max_seq_length": 200,
+            "qa_checkpoint_path": "/home/muhan/data/workspace/kb_encoder/train_ob_qa_deberta_v3_match_vat/0/checkpoint/epoch=08-test_accuracy-test_accuracy=0.904.ckpt",
             "optimizer_class": "AdamW",
             "use_matcher": true,
             "matcher_mode": "embedding",
             "matcher_config": {
                 "question_match_max_times": 1000,
-                "question_match_max_depth": 0,
+                "question_match_max_depth": 3,
                 "question_match_edge_top_k": 10,
-                "question_match_source_context_range": 0,
-                "question_select_max_edges": 0,
-                "question_select_discard_edges_if_rank_below": 0,
+                "question_match_source_context_range": 1,
+                "question_select_max_edges": 3,
+                "question_select_discard_edges_if_rank_below": "auto",
                 "choices_match_max_times": 1000,
-                "choices_match_max_depth": 1,
+                "choices_match_max_depth": 2,
                 "choices_match_edge_top_k": 10,
-                "choices_match_source_context_range": 0,
+                "choices_match_source_context_range": 1,
                 "choices_select_max_edges": 6,
-                "choices_select_discard_edges_if_rank_below": 0.25
+                "choices_select_discard_edges_if_rank_below": "auto"
             },
             "seed": 697474,
             "save": true
@@ -50,8 +50,6 @@
     ],
     "early_stopping_patience": 15,
     "gpus": [0],
-    "stages": [
-        "commonsense_qa"
-    ],
-    "working_directory": "/home/muhan/data/workspace/kb_encoder/train_comm_qa_deberta_v3_vat"
+    "stages": ["openbook_qa_fact"],
+    "working_directory": "/home/muhan/data/workspace/kb_encoder/train_ob_qa_fact_vat"
 }

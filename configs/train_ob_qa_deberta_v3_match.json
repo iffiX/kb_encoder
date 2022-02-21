@@ -5,7 +5,6 @@
             "base_type": "microsoft/deberta-v3-large",
             "model_configs": {
                 "choice_predictor_dropout_prob": 0.0,
-                "regularize_with_bce_loss": false
             },
             "batch_size": 8,
             "epochs": 20,

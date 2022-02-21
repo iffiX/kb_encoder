@@ -96,22 +96,22 @@ class OpenBookQAFactTrainer(pl.LightningModule):
         return search_loader
 
     def val_dataloader(self):
-        qa_loader_val = DataLoader(
-            dataset=self.dataset.validate_dataset,
-            num_workers=self.config.load_worker_num,
-            prefetch_factor=self.config.load_prefetch_per_worker,
-            batch_size=self.config.batch_size,
-            collate_fn=collate_function_dict_to_batch_encoding,
-            worker_init_fn=set_worker_sharing_strategy,
-        )
-        search_loader_val = DataLoader(
-            dataset=self.dataset.validate_search_dataset,
-            num_workers=self.config.load_worker_num,
-            prefetch_factor=self.config.load_prefetch_per_worker,
-            batch_size=self.config.batch_size,
-            collate_fn=collate_function_dict_to_batch_encoding,
-            worker_init_fn=set_worker_sharing_strategy,
-        )
+        # qa_loader_val = DataLoader(
+        #     dataset=self.dataset.validate_dataset,
+        #     num_workers=self.config.load_worker_num,
+        #     prefetch_factor=self.config.load_prefetch_per_worker,
+        #     batch_size=self.config.batch_size,
+        #     collate_fn=collate_function_dict_to_batch_encoding,
+        #     worker_init_fn=set_worker_sharing_strategy,
+        # )
+        # search_loader_val = DataLoader(
+        #     dataset=self.dataset.validate_search_dataset,
+        #     num_workers=self.config.load_worker_num,
+        #     prefetch_factor=self.config.load_prefetch_per_worker,
+        #     batch_size=self.config.batch_size,
+        #     collate_fn=collate_function_dict_to_batch_encoding,
+        #     worker_init_fn=set_worker_sharing_strategy,
+        # )
         qa_loader_test = DataLoader(
             dataset=self.dataset.test_dataset,
             num_workers=self.config.load_worker_num,
@@ -259,6 +259,8 @@ class OpenBookQAFactTrainer(pl.LightningModule):
             search_metrics = self.dataset.validate_search(
                 search_batch, search_keywords_list
             )
+            for key, value in search_metrics.items():
+                self.log(f"{prefix}_search_{key}", value, prog_bar=True, sync_dist=True)
 
             # qa_batch, qa_result = collate_and_filter_outputs(
             #     outputs[dataloader_idx + 2]
@@ -272,10 +274,9 @@ class OpenBookQAFactTrainer(pl.LightningModule):
             else:
                 qa_metrics = self.dataset.validate_logits(qa_batch, qa_result)
 
-            for key, value in search_metrics.items():
-                self.log(f"{prefix}_search_{key}", value, prog_bar=True, sync_dist=True)
             for key, value in qa_metrics.items():
                 self.log(f"{prefix}_qa_{key}", value, prog_bar=True, sync_dist=True)
+
             if not self.is_distributed or get_rank() == 0:
                 print("Validation result:")
                 for key, value in search_metrics.items():

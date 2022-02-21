@@ -72,73 +72,6 @@ class OpenBookQATrainConfig(BaseModel):
     match_closest_when_no_equal: bool = True
 
 
-class OpenBookQAWithSearchTrainConfig(BaseModel):
-    load: bool = False
-    seed: int = 0
-    save: bool = True
-    save_last: bool = False
-    epochs: int = 5
-    qa_checkpoint_path: str = ""
-    search_warmup_epochs: int = 0
-    train_steps: Optional[int] = None
-    validate_steps: Optional[int] = None
-    batch_size: int = 2
-    accumulate_grad_batches: int = 32
-
-    optimizer_class: str = "Adam"
-    learning_rate: float = 5e-5
-    l2_regularization: float = 0
-
-    base_type: str = "t5-large"
-    max_seq_length: int = 128
-    generate_length: int = 20
-    device_map: Optional[Dict[int, List[int]]] = None
-    load_worker_num: Optional[int] = 0
-    load_prefetch_per_worker: Optional[int] = 2
-
-    use_matcher: bool = True
-    matcher_mode: str = "embedding"
-    matcher_config: Optional[dict] = None
-    include_option_label_in_sentence: bool = False
-    include_option_label_in_answer_and_choices: bool = False
-    use_option_label_as_answer_and_choices: bool = False
-    match_closest_when_no_equal: bool = True
-
-
-class OpenBookQAKeywordsTrainConfig(BaseModel):
-    load: bool = False
-    seed: int = 0
-    save: bool = True
-    save_last: bool = False
-    epochs: int = 5
-    qa_checkpoint_path: str = ""
-    search_warmup_epochs: int = 0
-    train_steps: Optional[int] = None
-    validate_steps: Optional[int] = None
-    batch_size: int = 2
-    accumulate_grad_batches: int = 32
-
-    optimizer_class: str = "Adam"
-    learning_rate: float = 5e-5
-    tree_learning_rate: float = 5e-5
-    l2_regularization: float = 0
-
-    base_type: str = "t5-large"
-    max_seq_length: int = 128
-    generate_length: int = 20
-    device_map: Optional[Dict[int, List[int]]] = None
-    load_worker_num: Optional[int] = 0
-    load_prefetch_per_worker: Optional[int] = 2
-
-    use_matcher: bool = True
-    matcher_mode: str = "embedding"
-    matcher_config: Optional[dict] = None
-    include_option_label_in_sentence: bool = False
-    include_option_label_in_answer_and_choices: bool = False
-    use_option_label_as_answer_and_choices: bool = False
-    match_closest_when_no_equal: bool = True
-
-
 class OpenBookQAFactTrainConfig(BaseModel):
     load: bool = False
     seed: int = 0
@@ -201,8 +134,6 @@ class Config(BaseModel):
         Union[
             CommonsenseQATrainConfig,
             OpenBookQATrainConfig,
-            OpenBookQAWithSearchTrainConfig,
-            OpenBookQAKeywordsTrainConfig,
             OpenBookQAFactTrainConfig,
             EnsembleTrainConfig,
         ]
@@ -213,8 +144,6 @@ def stage_name_to_config(name: str, config_dict: dict = None):
     stage_name_to_config_map = {
         "commonsense_qa": CommonsenseQATrainConfig,
         "openbook_qa": OpenBookQATrainConfig,
-        "openbook_qa_with_search": OpenBookQAWithSearchTrainConfig,
-        "openbook_qa_keywords": OpenBookQAKeywordsTrainConfig,
         "openbook_qa_fact": OpenBookQAFactTrainConfig,
         "ensemble": EnsembleTrainConfig,
     }

@@ -1,6 +1,7 @@
 import re
 import os
 import nltk
+import json
 import logging
 import datasets
 from nltk.corpus import wordnet
@@ -20,6 +21,7 @@ class CommonsenseQAMatcher(BaseMatcher):
         "https://conceptnet.s3.amazonaws.com/downloads/2019/"
         "numberbatch/numberbatch-en-19.08.txt.gz"
     )
+    TRAIN_URL = "https://s3.amazonaws.com/commensenseqa/train_rand_split.jsonl"
 
     def __init__(self, tokenizer: PreTrainedTokenizerBase):
         assertion_path = str(
@@ -34,6 +36,7 @@ class CommonsenseQAMatcher(BaseMatcher):
         archive_path = str(
             os.path.join(preprocess_cache_dir, "conceptnet-archive.data")
         )
+        train_path = os.path.join(dataset_cache_dir, "commonsense_qa", "train.jsonl")
 
         for task, data_path, url in (
             ("assertions", assertion_path, self.ASSERTION_URL),
@@ -45,6 +48,10 @@ class CommonsenseQAMatcher(BaseMatcher):
                     download_to(url, str(data_path) + ".gz")
                 logging.info("Decompressing")
                 decompress_gz(str(data_path) + ".gz", data_path)
+
+        if not os.path.exists(train_path):
+            logging.info("Downloading commonsense qa train dataset.")
+            download_to(self.TRAIN_URL, train_path)
 
         if not os.path.exists(archive_path):
             logging.info("Processing concept net")
@@ -79,14 +86,38 @@ class CommonsenseQAMatcher(BaseMatcher):
                 "DerivedFrom",
                 "EtymologicallyDerivedFrom",
                 "EtymologicallyRelatedTo",
+                "RelatedTo",
                 # "FormOf",
             ]
         )
         self.matcher.kb.disable_edges_with_weight_below(1)
         super(CommonsenseQAMatcher, self).__init__(tokenizer, matcher)
+        self.add_commonsense_qa_train_dataset()
         # self.add_wordnet_definition()
         # self.add_openbook_qa_knowledge()
         # self.add_generics_kb()
+
+    def add_commonsense_qa_train_dataset(self):
+        logging.info("Adding Commonsense QA train dataset")
+        commonsense_qa_train_dataset_path = os.path.join(
+            dataset_cache_dir, "commonsense_qa", "train.jsonl"
+        )
+        count = 0
+        with open(commonsense_qa_train_dataset_path, "r") as file:
+            for line in file:
+                sample = json.loads(line)
+                correct_choice = [
+                    c["text"]
+                    for c in sample["question"]["choices"]
+                    if c["label"] == sample["answerKey"]
+                ][0]
+                line = sample["question"]["stem"] + " " + correct_choice
+                if line.count(".") >= 3:
+                    continue
+                count += 1
+                ids, mask = self.tokenize_and_mask(line)
+                self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
+        logging.info(f"Added {count} composite nodes")
 
     # def add_generics_kb(self):
     #     logging.info("Adding generics kb")
@@ -126,65 +157,65 @@ class CommonsenseQAMatcher(BaseMatcher):
     #             )
     #     logging.info(f"Added {len(added)} composite nodes")
 
-    def add_openbook_qa_knowledge(self):
-        logging.info("Adding OpenBook QA knowledge")
-        openbook_qa_path = os.path.join(
-            dataset_cache_dir, "openbook_qa", "OpenBookQA-V1-Sep2018", "Data"
-        )
-        openbook_qa_facts_path = os.path.join(openbook_qa_path, "Main", "openbook.txt")
-        crowd_source_facts_path = os.path.join(
-            openbook_qa_path, "Additional", "crowdsourced-facts.txt"
-        )
-        qasc_additional_path = os.path.join(preprocess_cache_dir, "qasc_additional.txt")
-        manual_additional_path = os.path.join(
-            preprocess_cache_dir, "manual_additional.txt"
-        )
-        count = 0
-        for path in (
-            openbook_qa_facts_path,
-            crowd_source_facts_path,
-            # qasc_additional_path,
-            manual_additional_path,
-        ):
-            with open(path, "r") as file:
-                for line in file:
-                    line = line.strip("\n").strip(".").strip('"').strip("'").strip(",")
-                    if len(line) < 3:
-                        continue
-                    count += 1
-                    ids, mask = self.tokenize_and_mask(line)
-                    self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
-        logging.info(f"Added {count} composite nodes")
-
-    def add_wordnet_definition(self):
-        logging.info("Adding wordnet definition")
-        added = set()
-        for ss in wordnet.all_synsets():
-            s = [ln.replace("_", " ").lower() for ln in ss.lemma_names()]
-            if s[0].count(" ") > 0:
-                continue
-            definition = (
-                ss.definition()
-                .replace("(", ",")
-                .replace(")", ",")
-                .replace(";", ",")
-                .replace('"', " ")
-                .lower()
-            )
-            # knowledge = f"{','.join(s)} is defined as {definition}"
-            knowledge = f"{s[0]} is defined as {definition}"
-
-            if len(knowledge) > 100:
-                # if trim_index = -1 this will also work, but not trimming anything
-                trim_index = knowledge.find(" ", 100)
-                knowledge = knowledge[:trim_index]
-            if knowledge not in added:
-                added.add(knowledge)
-                # Only allow definition part to be matched
-                sentence_mask = "+" * len(s[0]) + "-" * (len(knowledge) - len(s[0]))
-                ids, mask = self.tokenize_and_mask(knowledge, sentence_mask)
-                self.matcher.kb.add_composite_node(knowledge, "RelatedTo", ids, mask)
-        logging.info(f"Added {len(added)} composite nodes")
+    # def add_openbook_qa_knowledge(self):
+    #     logging.info("Adding OpenBook QA knowledge")
+    #     openbook_qa_path = os.path.join(
+    #         dataset_cache_dir, "openbook_qa", "OpenBookQA-V1-Sep2018", "Data"
+    #     )
+    #     openbook_qa_facts_path = os.path.join(openbook_qa_path, "Main", "openbook.txt")
+    #     crowd_source_facts_path = os.path.join(
+    #         openbook_qa_path, "Additional", "crowdsourced-facts.txt"
+    #     )
+    #     qasc_additional_path = os.path.join(preprocess_cache_dir, "qasc_additional.txt")
+    #     manual_additional_path = os.path.join(
+    #         preprocess_cache_dir, "manual_additional.txt"
+    #     )
+    #     count = 0
+    #     for path in (
+    #         openbook_qa_facts_path,
+    #         crowd_source_facts_path,
+    #         # qasc_additional_path,
+    #         manual_additional_path,
+    #     ):
+    #         with open(path, "r") as file:
+    #             for line in file:
+    #                 line = line.strip("\n").strip(".").strip('"').strip("'").strip(",")
+    #                 if len(line) < 3:
+    #                     continue
+    #                 count += 1
+    #                 ids, mask = self.tokenize_and_mask(line)
+    #                 self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
+    #     logging.info(f"Added {count} composite nodes")
+    #
+    # def add_wordnet_definition(self):
+    #     logging.info("Adding wordnet definition")
+    #     added = set()
+    #     for ss in wordnet.all_synsets():
+    #         s = [ln.replace("_", " ").lower() for ln in ss.lemma_names()]
+    #         if s[0].count(" ") > 0:
+    #             continue
+    #         definition = (
+    #             ss.definition()
+    #             .replace("(", ",")
+    #             .replace(")", ",")
+    #             .replace(";", ",")
+    #             .replace('"', " ")
+    #             .lower()
+    #         )
+    #         # knowledge = f"{','.join(s)} is defined as {definition}"
+    #         knowledge = f"{s[0]} is defined as {definition}"
+    #
+    #         if len(knowledge) > 100:
+    #             # if trim_index = -1 this will also work, but not trimming anything
+    #             trim_index = knowledge.find(" ", 100)
+    #             knowledge = knowledge[:trim_index]
+    #         if knowledge not in added:
+    #             added.add(knowledge)
+    #             # Only allow definition part to be matched
+    #             sentence_mask = "+" * len(s[0]) + "-" * (len(knowledge) - len(s[0]))
+    #             ids, mask = self.tokenize_and_mask(knowledge, sentence_mask)
+    #             self.matcher.kb.add_composite_node(knowledge, "RelatedTo", ids, mask)
+    #     logging.info(f"Added {len(added)} composite nodes")
 
     def __reduce__(self):
         return CommonsenseQAMatcher, (self.tokenizer,)

@@ -4,9 +4,11 @@ import json
 import pickle
 import difflib
 import logging
+import nltk
 import numpy as np
 import torch as t
 from typing import List
+from nltk.stem import WordNetLemmatizer
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, BatchEncoding
 from encoder.dataset.matcher.commonsense_qa import CommonsenseQAMatcher
 from encoder.utils.settings import (
@@ -113,6 +115,18 @@ class CommonsenseQADataset:
                 self.validate_data = data["validate"]
                 self.test_data = data["test"]
 
+        self.train_disable_list = []
+        for data in self.train_data:
+            try:
+                nodes = self.matcher.matcher.kb.find_nodes(
+                    [data["text_question"] + " " + data["choices"][data["label"]]]
+                )
+            except ValueError:
+                nodes = None
+            self.train_disable_list.append(nodes)
+
+        self.set_corpus()
+
     @property
     def train_dataset(self):
         return StaticIterableDataset(len(self.train_data), self.generator, ("train",),)
@@ -140,11 +154,39 @@ class CommonsenseQADataset:
                 # data to gpu by moving
                 data = copy.deepcopy(data)
                 if self.matcher_mode == "embedding":
-                    target = data["text_question"]
+                    wnl = WordNetLemmatizer()
+
+                    if len(data["target"]) > 0:
+                        # For supporting manually setting search targets
+                        allowed_tokens = data["target"]
+                    else:
+                        tokens = nltk.word_tokenize(data["text_question"])
+                        allowed_tokens = [data["question_concept"]]
+                        tagged = nltk.pos_tag(tokens)
+                        for token, pos in tagged:
+                            if pos.startswith("NN"):
+                                allowed_tokens.append(wnl.lemmatize(token))
+                        if len(allowed_tokens) < 3:
+                            for token, pos in tagged:
+                                if pos.startswith("JJ"):
+                                    allowed_tokens.append(wnl.lemmatize(token))
+
+                    target = " @ ".join(sorted(list(set(allowed_tokens))))
+                    target_mask = []
+                    for c in target:
+                        if c == "@":
+                            target_mask.append("-")
+                        else:
+                            target_mask.append("+")
+                    target_mask = "".join(target_mask)
 
                     match = self.matcher.match_by_node_embedding(
                         data["text_question"],
                         target_sentence=target,
+                        target_mask=target_mask,
+                        disabled_nodes=self.train_disable_list[index]
+                        if split == "train"
+                        else None,
                         seed=self.matcher_seed,
                         max_times=self.matcher_config["question_match_max_times"],
                         max_depth=self.matcher_config["question_match_max_depth"],
@@ -162,10 +204,8 @@ class CommonsenseQADataset:
                     )
 
                     new_question = self.matcher.insert_selection(
-                        data["text_question"], selection, insert_at_end=True,
+                        data["text_question"], selection, insert_at_end=True, sep="#"
                     )
-
-                    # new_question = data["text_question"] + f" ({data['fact']}) "
 
                     choice_mask = "+" * len(data["text_choices"])
                     for choice in ("[A]", "[B]", "[C]", "[D]", "[E]"):
@@ -180,7 +220,11 @@ class CommonsenseQADataset:
                     match = self.matcher.match_by_node_embedding(
                         data["text_choices"],
                         target_sentence=target,
+                        target_mask=target_mask,
                         source_mask=choice_mask,
+                        disabled_nodes=self.train_disable_list[index]
+                        if split == "train"
+                        else None,
                         seed=self.matcher_seed,
                         max_times=self.matcher_config["choices_match_max_times"],
                         max_depth=self.matcher_config["choices_match_max_depth"],
@@ -198,7 +242,7 @@ class CommonsenseQADataset:
                     )
 
                     new_choices = self.matcher.insert_selection(
-                        data["text_choices"], selection,
+                        data["text_choices"], selection, insert_at_end=True, sep="#"
                     )
                     for choice in ("a", "b", "c", "d"):
                         new_choices = new_choices.replace(
@@ -248,38 +292,75 @@ class CommonsenseQADataset:
                 # data to gpu by moving
                 data = copy.deepcopy(data)
                 if self.matcher_mode == "embedding":
-                    target = data["text_question"]
+                    wnl = WordNetLemmatizer()
 
-                    match = self.matcher.match_by_node_embedding(
-                        data["text_question"],
-                        target_sentence=data["text_question"],
-                        seed=self.matcher_seed,
-                        max_times=self.matcher_config["question_match_max_times"],
-                        max_depth=self.matcher_config["question_match_max_depth"],
-                        edge_top_k=self.matcher_config["question_match_edge_top_k"],
-                        source_context_range=self.matcher_config[
-                            "question_match_source_context_range"
-                        ],
-                    )
-                    selection = self.matcher.select_paths(
-                        match,
-                        max_edges=self.matcher_config["question_select_max_edges"],
-                        discard_edges_if_rank_below=self.matcher_config[
-                            "question_select_discard_edges_if_rank_below"
-                        ],
-                    )
+                    if len(data["target"]) > 0:
+                        # For supporting manually setting search targets
+                        allowed_tokens = data["target"]
+                    else:
+                        tokens = nltk.word_tokenize(data["text_question"])
+                        allowed_tokens = [data["question_concept"]]
+                        tagged = nltk.pos_tag(tokens)
+                        for token, pos in tagged:
+                            if pos.startswith("NN"):
+                                allowed_tokens.append(wnl.lemmatize(token))
+                        if len(allowed_tokens) < 3:
+                            for token, pos in tagged:
+                                if pos.startswith("JJ"):
+                                    allowed_tokens.append(wnl.lemmatize(token))
 
-                    new_question = self.matcher.insert_selection(
-                        data["text_question"], selection, insert_at_end=True,
-                    )
+                    target = " @ ".join(sorted(list(set(allowed_tokens))))
+                    target_mask = []
+                    for c in target:
+                        if c == "@":
+                            target_mask.append("-")
+                        else:
+                            target_mask.append("+")
+                    target_mask = "".join(target_mask)
 
-                    # new_question = data["text_question"] + f" ({data['fact']}) "
+                    new_question = data["text_question"]
+                    # match = self.matcher.match_by_node_embedding(
+                    #     data["text_question"] + " " + data["question_concept"],
+                    #     source_mask="-" * (len(data["text_question"]) + 1)
+                    #     + "+" * len(data["question_concept"]),
+                    #     target_sentence=" ".join(data["choices"]),
+                    #     disabled_nodes=self.train_disable_list[index]
+                    #     if split == "train"
+                    #     else None,
+                    #     seed=self.matcher_seed,
+                    #     max_times=self.matcher_config["question_match_max_times"],
+                    #     max_depth=self.matcher_config["question_match_max_depth"],
+                    #     edge_top_k=self.matcher_config["question_match_edge_top_k"],
+                    #     source_context_range=self.matcher_config[
+                    #         "question_match_source_context_range"
+                    #     ],
+                    # )
+                    # selection = self.matcher.select_paths(
+                    #     match,
+                    #     max_edges=self.matcher_config["question_select_max_edges"],
+                    #     discard_edges_if_rank_below=self.matcher_config[
+                    #         "question_select_discard_edges_if_rank_below"
+                    #     ],
+                    # )
+                    #
+                    # new_question = self.matcher.insert_selection(
+                    #     data["text_question"], selection, insert_at_end=True, sep="#"
+                    # )
+
+                    # new_question = self.insert_choice_by_weight_to_question(
+                    #     data["text_question"], data["question_concept"], data["choices"]
+                    # )
 
                     new_choices = []
+                    # new_choices = data["choices"]
                     for choice in data["choices"]:
                         match = self.matcher.match_by_node_embedding(
                             choice,
                             target_sentence=target,
+                            target_mask=target_mask,
+                            disabled_nodes=self.train_disable_list[index]
+                            if split == "train"
+                            else None,
                             seed=self.matcher_seed,
                             max_times=self.matcher_config["choices_match_max_times"],
                             max_depth=self.matcher_config["choices_match_max_depth"],
@@ -297,7 +378,9 @@ class CommonsenseQADataset:
                         )
 
                         new_choices.append(
-                            self.matcher.insert_selection(choice, selection,)
+                            self.matcher.insert_selection(
+                                choice, selection, insert_at_end=True, sep="#"
+                            )
                         )
                 elif self.matcher_mode == "none":
                     new_question = data["text_question"]
@@ -340,6 +423,35 @@ class CommonsenseQADataset:
                 data["type_ids"] = t.stack(type_ids, dim=1)
         return data
 
+    def insert_choice_by_weight_to_question(self, question, question_concept, choices):
+        kb = self.matcher.matcher.kb
+        qc_node = kb.find_nodes([question_concept])[0]
+        weights = []
+        choice_edge_names = []
+        for choice in choices:
+            try:
+                ch_node = kb.find_nodes([choice])[0]
+            except ValueError:
+                weights.append(-1)
+                choice_edge_names.append(None)
+            else:
+                edges = kb.get_edges(qc_node, ch_node)
+                if len(edges) > 0:
+                    weights.append(edges[0][3])
+                    choice_edge_names.append(
+                        f"{kb.nodes[edges[0][0]]} "
+                        f"{kb.relationships[edges[0][1]]} "
+                        f"{kb.nodes[edges[0][2]]}"
+                    )
+                else:
+                    weights.append(-1)
+                    choice_edge_names.append(None)
+        idx = np.argmax(weights)
+        if weights[idx] != -1:
+            return question + f" ( {choice_edge_names[idx]} # )"
+        else:
+            return question
+
     def validate_logits(self, batch: BatchEncoding, logits: t.Tensor):
         """
         For use with a classifier model
@@ -357,12 +469,15 @@ class CommonsenseQADataset:
                 sentences = [
                     self.tokenizer.decode(t, skip_special_tokens=True) for t in tokens
                 ]
-                for i, sentence in enumerate(sentences):
-                    print(f"sentence {i}: [{sentence}] \n")
+                if answer != ref_answer:
+                    for j, sentence in enumerate(sentences):
+                        print(f"sentence {j}: [{sentence}] \n")
             else:
                 sentence = self.tokenizer.decode(tokens, skip_special_tokens=True)
-                print(f"sentence {i}: [{sentence}] \n")
-            print(f"answer: [{answer}] \n" f"ref_answer: [{ref_answer}]")
+                if answer != ref_answer:
+                    print(f"sentence {i}: [{sentence}] \n")
+            if answer != ref_answer:
+                print(f"answer: [{answer}] \n" f"ref_answer: [{ref_answer}]")
 
         return {"accuracy": float(np.sum(labels == ref_labels)) / labels.shape[0]}
 
@@ -407,11 +522,13 @@ class CommonsenseQADataset:
                         answers[batch["id"][i]] = True
                 else:
                     missing += 1
-            print(
-                f"sentence: [{sentence}] \n"
-                f"answer: [{answer}] \n"
-                f"ref_answer: [{ref_answer}]"
-            )
+
+            if answer != ref_answer:
+                print(
+                    f"sentence: [{sentence}] \n"
+                    f"answer: [{answer}] \n"
+                    f"ref_answer: [{ref_answer}]"
+                )
 
         print(f"Missing ratio {float(missing) / total}")
         if self.match_closest_when_no_equal:
@@ -469,20 +586,27 @@ class CommonsenseQADataset:
                     file.write(json.dumps({"id": preprocessed["id"], "answerKey": "A"}))
         print(f"Missing ratio {float(missing)/len(self.test_data)}")
 
+    def set_corpus(self):
+        corpus = []
+        for data in self.train_data:
+            corpus.append(
+                self.matcher.tokenizer.encode(
+                    data["text_question"] + " " + data["text_choices"],
+                    add_special_tokens=False,
+                )
+            )
+        print("Corpus loaded, begin setting")
+        self.matcher.matcher.set_corpus(corpus)
+
     def parse_data(self, path):
         data = []
         logging.info(f"Parsing {path}")
         with open_file_with_create_directories(path, "r") as file:
             for line in file:
                 entry = json.loads(line)
-                if self.include_option_label_in_sentence:
-                    text_choices = self.generate_choice_str(
-                        [ch["text"] for ch in entry["question"]["choices"]]
-                    )
-                else:
-                    text_choices = ", ".join(
-                        ch["text"] for ch in entry["question"]["choices"]
-                    )
+                text_choices = self.generate_choice_str(
+                    [ch["text"] for ch in entry["question"]["choices"]]
+                )
 
                 choices = [
                     f"{ch['text'].lower().strip(',')}"
@@ -493,37 +617,22 @@ class CommonsenseQADataset:
                     "text_question": entry["question"]["stem"],
                     "text_choices": text_choices,
                     "question_concept": entry["question"]["question_concept"],
+                    "target": [],
                     "choices": choices,
                     "id": entry["id"],
                 }
                 if "answerKey" in entry:
                     # For BERT, ALBERT, ROBERTA, use label instead, which is an integer
-                    preprocessed["label"] = [
+                    label = [
                         i
                         for i, ch in enumerate(entry["question"]["choices"])
                         if ch["label"] == entry["answerKey"]
                     ][0]
 
-                    # For T5, use answer
-                    if self.include_option_label_in_answer_and_choices:
-                        text_answer = [
-                            f"[{ch['label'].upper()}] {ch['text'].lower().strip(',')}"
-                            for ch in entry["question"]["choices"]
-                            if ch["label"] == entry["answerKey"]
-                        ][0]
-                    elif self.use_option_label_as_answer_and_choices:
-                        text_answer = [
-                            f"[{ch['label'].upper()}]"
-                            for ch in entry["question"]["choices"]
-                            if ch["label"] == entry["answerKey"]
-                        ][0]
-                    else:
-                        text_answer = [
-                            ch["text"].lower().strip(",")
-                            for ch in entry["question"]["choices"]
-                            if ch["label"] == entry["answerKey"]
-                        ][0]
-                    preprocessed["text_answer"] = text_answer
+                    preprocessed["label"] = label
+                    preprocessed["text_answer"] = self.generate_text_answer(
+                        label, choices[label]
+                    )
 
                 data.append(preprocessed)
         return data
@@ -542,10 +651,22 @@ class CommonsenseQADataset:
                 file,
             )
 
-    @staticmethod
-    def generate_choice_str(choices: List[str]):
-        result = ""
+    def generate_choice_str(self, choices: List[str]):
+        if self.include_option_label_in_sentence:
+            result = ""
+            options = ["[A]", "[B]", "[C]", "[D]", "[E]"]
+            for option, choice in zip(options, choices):
+                result += option + " " + choice + " "
+            return result
+        else:
+            return ", ".join(choices)
+
+    def generate_text_answer(self, label, choice):
         options = ["[A]", "[B]", "[C]", "[D]", "[E]"]
-        for option, choice in zip(options, choices):
-            result += option + " " + choice + " "
-        return result
+        if self.include_option_label_in_answer_and_choices:
+            text_answer = f"{options[label]} {choice.lower().strip(',')}"
+        elif self.use_option_label_as_answer_and_choices:
+            text_answer = f"{options[label]}"
+        else:
+            text_answer = choice.lower().strip(",")
+        return text_answer

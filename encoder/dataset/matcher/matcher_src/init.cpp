@@ -131,6 +131,7 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("target_sentence") = std::vector<int>{},
                  py::arg("source_mask") = std::vector<int>{},
                  py::arg("target_mask") = std::vector<int>{},
+                 py::arg("disabled_nodes") = std::vector<long>{},
                  py::arg("max_times") = 100, py::arg("max_depth") = 3, py::arg("seed") = -1,
                  py::arg("edge_top_k") = -1, py::arg("source_context_range") = 0,
                  py::arg("trim_path") = true,

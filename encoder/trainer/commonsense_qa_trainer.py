@@ -272,6 +272,7 @@ class CommonsenseQATrainer(pl.LightningModule):
                 {
                     # REQUIRED: The scheduler instance
                     "scheduler": sch,
+                    "interval": "step",
                     "monitor": self.monitor,
                 }
             ],

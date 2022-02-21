@@ -308,10 +308,15 @@ void KnowledgeBase::disableEdgesOfNodes(const vector<string> &nod) {
 vector<long> KnowledgeBase::findNodes(const vector<string> &nod) const {
     vector<long> ids;
     for (auto &nName : nod) {
+        bool found = false;
         for (long nodeId = 0; nodeId < nodes.size(); nodeId++) {
-            if (nodes[nodeId] == nName)
+            if (nodes[nodeId] == nName) {
                 ids.push_back(nodeId);
+                found = true;
+            }
         }
+        if (not found)
+            throw invalid_argument(fmt::format("Node {} not found", nName));
     }
     return move(ids);
 }
@@ -1020,6 +1025,7 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
                                        const vector<int> &targetSentence,
                                        const vector<int> &sourceMask,
                                        const vector<int> &targetMask,
+                                       const vector<long> &disableNodes,
                                        int maxTimes, int maxDepth, int seed,
                                        int edgeTopK, int sourceContextRange, bool trim,
                                        float stopSearchingEdgeIfSimilarityBelow,
@@ -1037,6 +1043,8 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
     cout << fmt::format("sourceMask: [{}]",
                         fmt::join(sourceMask.begin(), sourceMask.end(), ",")) << endl;
     cout << fmt::format("targetMask: [{}]",
+                        fmt::join(targetMask.begin(), targetMask.end(), ",")) << endl;
+    cout << fmt::format("disabledNodes: [{}]",
                         fmt::join(targetMask.begin(), targetMask.end(), ",")) << endl;
     cout << "maxTimes: " << maxTimes << endl;
     cout << "maxDepth: " << maxDepth << endl;
@@ -1068,6 +1076,8 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
 #endif
         return move(MatchResult());
     }
+
+    unordered_set<long> disabledNodeSet(disableNodes.begin(), disableNodes.end());
 
     // node ids in targetSentence (or sourceSentence if targetSentence is empty), their occurence times
     unordered_map<long, float> targetNodes;
@@ -1128,7 +1138,8 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
 
 #pragma omp parallel for reduction(vsg_join : visitedSubGraph) \
     default(none) \
-    shared(nodes, sourceMatch, targetNodes, posRef, cout, edgeTopK, discardEdgesIfSimilarityBelow, \
+    shared(disabledNodes, \
+           nodes, sourceMatch, targetNodes, posRef, cout, edgeTopK, discardEdgesIfSimilarityBelow, \
            corpusNodesCountSum, compositeNodesCountSum) \
     firstprivate(seed, maxTimes, maxDepth, similarityCache)
 
@@ -1187,12 +1198,14 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
                 long otherNodeId = j < outSize ? get<2>(edge) : get<0>(edge);
 
                 if (kb.isEdgeDisabled[edgeIndex] ||
-                    (path.visitedNodes.find(otherNodeId) != path.visitedNodes.end())) {
+                    (path.visitedNodes.find(otherNodeId) != path.visitedNodes.end()) ||
+                    (disabledNodeSet.find(otherNodeId) != disabledNodeSet.end())) {
                     sim[j] = 0;
 #ifdef DEBUG_DECISION
-                    cout << fmt::format("Skipping edge because: edge disabled [{}], node visited [{}]",
-                                    kb.isEdgeDisabled[edgeIndex],
-                                        path.visitedNodes.find(otherNodeId) != path.visitedNodes.end()) << endl;
+                    cout << fmt::format("Skipping edge because: edge disabled [{}], node visited [{}], node disabled [{}]",
+                                        kb.isEdgeDisabled[edgeIndex],
+                                        path.visitedNodes.find(otherNodeId) != path.visitedNodes.end(),
+                                        disabledNodeSet.find(otherNodeId) != disabledNodeSet.end()) << endl;
 #endif
                 }
                 else {

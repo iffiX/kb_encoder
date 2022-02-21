@@ -38,18 +38,13 @@ class BaseMatcher:
         self.tokenizer = tokenizer
         self.matcher = matcher
 
-    def match_composite_nodes(self, target_sentence, target_mask: str = ""):
-        target_tokens, _target_mask = self.tokenize_and_mask(
-            target_sentence, target_mask
-        )
-        return self.matcher.match_composite_nodes(target_tokens, _target_mask)
-
     def match_by_node_embedding(
         self,
         source_sentence: str,
         target_sentence: str = "",
         source_mask: str = "",
         target_mask: str = "",
+        disabled_nodes: List[int] = None,
         max_times: int = 1000,
         max_depth: int = 3,
         seed: int = -1,
@@ -73,6 +68,9 @@ class BaseMatcher:
                 target_sentence, target_mask
             )
 
+        optional_args = {}
+        if disabled_nodes is not None:
+            optional_args["disabled_nodes"] = disabled_nodes
         result = self.matcher.match_by_node_embedding(
             source_sentence=source_tokens,
             target_sentence=target_tokens,
@@ -86,6 +84,7 @@ class BaseMatcher:
             trim_path=trim_path,
             stop_searching_edge_if_similarity_below=stop_searching_edge_if_similarity_below,
             source_context_weight=source_context_weight,
+            **optional_args,
         )
         return result
 
@@ -134,10 +133,6 @@ class BaseMatcher:
         insert_at_end: bool = False,
         include_weights: bool = False,
     ) -> str:
-        """
-        If the triples are directly inserted at the end, accuracy
-        reduced by more than 50%
-        """
         sentence_tokens, _ = self.tokenize_and_mask(sentence)
         if len(selection) == 0:
             return self.tokenizer.decode(sentence_tokens)

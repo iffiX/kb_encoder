@@ -4,7 +4,6 @@ import random
 
 import nltk
 import torch as t
-import numpy as np
 from nltk.stem import WordNetLemmatizer
 from transformers import PreTrainedTokenizerBase, BatchEncoding
 from encoder.utils.settings import dataset_cache_dir
@@ -51,6 +50,13 @@ class OpenBookQAFactDataset(OpenBookQADataset):
         self.search_tokenizer = search_tokenizer
         self.search_negative_samples = search_negative_samples
         self.fact_list = self.get_fact_list()
+        self.fact_keywords = [
+            self.get_gold_search_target(fact) for fact in self.fact_list
+        ]
+        self.negative_fact_gen = {
+            fact: self.sample_negative_fact(fact) for fact in self.fact_list
+        }
+        self.keyword_occurrence = self.get_keyword_occurrence(self.fact_keywords)
 
     @property
     def train_search_dataset(self):
@@ -97,16 +103,11 @@ class OpenBookQAFactDataset(OpenBookQADataset):
         sentences, masks, type_ids = [], [], []
         if split == "train":
             correct_choice = random.randint(0, self.search_negative_samples)
-            available_fact_idx = list(
-                set(range(len(self.fact_list))).difference(
-                    {self.fact_list.index(data["fact"])}
-                )
-            )
             for i in range(self.search_negative_samples + 1):
                 fact = (
                     data["fact"]
                     if i == correct_choice
-                    else self.fact_list[random.choice(available_fact_idx)]
+                    else next(self.negative_fact_gen[data["fact"]])
                 )
                 encoded_sentence = self.tokenizer(
                     data["text_question"] + f" ({fact}) ",
@@ -195,6 +196,31 @@ class OpenBookQAFactDataset(OpenBookQADataset):
         search_target = sorted(list(set(allowed_tokens)))
         return search_target
 
+    def sample_negative_fact(self, fact):
+        available_fact_idx = list(
+            set(range(len(self.fact_list))).difference({self.fact_list.index(fact)})
+        )
+        while True:
+            yield self.fact_list[random.choice(available_fact_idx)]
+
+    # def sample_negative_fact(self, fact):
+    #     fact_idx = self.fact_list.index(fact)
+    #     keywords = self.fact_keywords[fact_idx]
+    #     similarity = t.ones([len(self.fact_list)])
+    #     similarity_additional = t.zeros([len(self.fact_list)])
+    #     for keyword in keywords:
+    #         similarity_additional += self.keyword_occurrence[keyword]
+    #     # similarity_additional = (
+    #     #     similarity_additional
+    #     #     / (similarity_additional.sum() + 1e-6)
+    #     #     * (len(self.fact_list) / 9)
+    #     # )
+    #     similarity += similarity_additional
+    #     similarity[fact_idx] = 0
+    #     dist = t.distributions.Categorical(similarity)
+    #     while True:
+    #         yield self.fact_list[dist.sample().item()]
+
     def get_fact_list(self):
         openbook_qa_path = os.path.join(
             dataset_cache_dir,
@@ -211,3 +237,12 @@ class OpenBookQAFactDataset(OpenBookQADataset):
                     line.strip("\n").strip(".").strip('"').strip("'").strip(",")
                 )
         return fact_list
+
+    def get_keyword_occurrence(self, fact_keywords):
+        keywords_set = {keyword for keywords in fact_keywords for keyword in keywords}
+        occurrence_dict = {}
+        for keyword in keywords_set:
+            occurrence_dict[keyword] = t.FloatTensor(
+                [1 if keyword in keywords else 0 for keywords in fact_keywords]
+            )
+        return occurrence_dict

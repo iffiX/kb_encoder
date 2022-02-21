@@ -286,6 +286,7 @@ public:
     MatchResult
     matchByNodeEmbedding(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
                          const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
+                         const std::vector<long> &disabledNodes = {},
                          int maxTimes = 100, int maxDepth = 3, int seed = -1,
                          int edgeTopK = -1, int sourceContextRange = 0, bool trimPath = true,
                          float stopSearchingEdgeIfSimilarityBelow = 0,

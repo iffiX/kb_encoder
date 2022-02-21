@@ -5,8 +5,6 @@ import pytorch_lightning as pl
 from ..utils.config import *
 from .commonsense_qa_trainer import CommonsenseQATrainer
 from .openbook_qa_trainer import OpenBookQATrainer
-from .openbook_qa_with_search_trainer import OpenBookQAWithSearchTrainer
-from .openbook_qa_keywords_trainer import OpenBookQAKeywordsTrainer
 from .openbook_qa_fact_trainer import OpenBookQAFactTrainer
 from .ensemble_trainer import EnsembleTrainer
 from pytorch_lightning import seed_everything
@@ -17,8 +15,6 @@ from pytorch_lightning.plugins import DDPPlugin
 stage_name_to_trainer_map = {
     "commonsense_qa": CommonsenseQATrainer,
     "openbook_qa": OpenBookQATrainer,
-    "openbook_qa_with_search": OpenBookQAWithSearchTrainer,
-    "openbook_qa_keywords": OpenBookQAKeywordsTrainer,
     "openbook_qa_fact": OpenBookQAFactTrainer,
     "ensemble": EnsembleTrainer,
 }
