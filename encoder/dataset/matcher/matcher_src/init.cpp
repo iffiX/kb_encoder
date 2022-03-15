@@ -63,7 +63,9 @@ PYBIND11_MODULE(matcher, m) {
             .def("disable_edges_with_weight_below", &KnowledgeBase::disableEdgesWithWeightBelow)
             .def("disable_edges_of_nodes", &KnowledgeBase::disableEdgesOfNodes)
             .def("disable_edges_of_relationships", &KnowledgeBase::disableEdgesOfRelationships)
-            .def("find_nodes", &KnowledgeBase::findNodes)
+            .def("find_nodes", &KnowledgeBase::findNodes,
+                 py::arg("nodes"),
+                 py::arg("quiet") = false)
             .def("get_edges", &KnowledgeBase::getEdges)
             .def("get_nodes", py::overload_cast<>(&KnowledgeBase::getNodes, py::const_))
             .def("get_nodes", py::overload_cast<const std::vector<long> &>(&KnowledgeBase::getNodes, py::const_))
@@ -71,7 +73,9 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("composite_node"),
                  py::arg("relationship"),
                  py::arg("tokenized_composite_node"),
-                 py::arg("mask") = std::vector<int>{})
+                 py::arg("mask") = std::vector<int>{},
+                 py::arg("split_node_minimum_edge_num") = 20,
+                 py::arg("split_node_minimum_similarity") = 0.35)
             .def("add_composite_edge", &KnowledgeBase::addCompositeEdge,
                  py::arg("source_node_id"),
                  py::arg("relation_id"),
@@ -126,6 +130,7 @@ PYBIND11_MODULE(matcher, m) {
             .def_readonly("corpus_size", &KnowledgeMatcher::corpusSize)
             .def_readonly("document_count_of_node_in_corpus", &KnowledgeMatcher::documentCountOfNodeInCorpus)
             .def("set_corpus", &KnowledgeMatcher::setCorpus)
+            .def("find_closest_concept", &KnowledgeMatcher::findClosestConcept)
             .def("match_by_node_embedding", &KnowledgeMatcher::matchByNodeEmbedding,
                  py::arg("source_sentence"),
                  py::arg("target_sentence") = std::vector<int>{},
@@ -135,11 +140,17 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("max_times") = 100, py::arg("max_depth") = 3, py::arg("seed") = -1,
                  py::arg("edge_top_k") = -1, py::arg("source_context_range") = 0,
                  py::arg("trim_path") = true,
+                 py::arg("split_node_minimum_edge_num") = 20,
+                 py::arg("split_node_minimum_similarity") = 0.35,
                  py::arg("stop_searching_edge_if_similarity_below") = 0,
                  py::arg("source_context_weight") = 0.2)
             .def("match_result_paths_to_strings", &KnowledgeMatcher::matchResultPathsToStrings)
             .def("join_match_results", &KnowledgeMatcher::joinMatchResults)
-            .def("select_paths", &KnowledgeMatcher::selectPaths)
+            .def("select_paths", &KnowledgeMatcher::selectPaths,
+                 py::arg("match_result"),
+                 py::arg("max_edges"),
+                 py::arg("discard_edges_if_rank_below"),
+                 py::arg("filter_short_accurate_paths") = false)
             .def("save", &KnowledgeMatcher::save,
                  py::arg("archive_path"))
             .def("load", &KnowledgeMatcher::load,

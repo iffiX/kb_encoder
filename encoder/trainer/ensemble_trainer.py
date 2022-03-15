@@ -6,7 +6,7 @@ from collections import Counter
 from torch.utils.data import DataLoader
 from transformers import BatchEncoding
 from .utils import collate_and_filter_outputs
-from .commonsense_qa_trainer import CommonsenseQATrainer
+from .commonsense_qa_search_trainer import CommonsenseQASearchTrainer
 from .openbook_qa_trainer import OpenBookQATrainer
 from encoder.dataset.base import SizeOnePlaceholderDataset
 from encoder.utils.config import EnsembleTrainConfig
@@ -196,7 +196,7 @@ class EnsembleTrainer(pl.LightningModule):
     @classmethod
     def stage_name_to_checkpoint(cls, stage: str, checkpoint_path: str):
         stage_name_to_trainer_map = {
-            "commonsense_qa": CommonsenseQATrainer,
+            "commonsense_qa": CommonsenseQASearchTrainer,
             "openbook_qa": OpenBookQATrainer,
         }
         if stage in stage_name_to_trainer_map:

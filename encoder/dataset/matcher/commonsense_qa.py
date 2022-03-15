@@ -23,7 +23,9 @@ class CommonsenseQAMatcher(BaseMatcher):
     )
     TRAIN_URL = "https://s3.amazonaws.com/commensenseqa/train_rand_split.jsonl"
 
-    def __init__(self, tokenizer: PreTrainedTokenizerBase):
+    def __init__(
+        self, tokenizer: PreTrainedTokenizerBase, for_question_annotation=False
+    ):
         assertion_path = str(
             os.path.join(dataset_cache_dir, "conceptnet-assertions.csv")
         )
@@ -80,43 +82,61 @@ class CommonsenseQAMatcher(BaseMatcher):
         else:
             matcher = KnowledgeMatcher(archive_path)
         super(CommonsenseQAMatcher, self).__init__(tokenizer, matcher)
-        # Disable relations of similar word forms
-        matcher.kb.disable_edges_of_relationships(
-            [
-                "DerivedFrom",
-                "EtymologicallyDerivedFrom",
-                "EtymologicallyRelatedTo",
-                # "RelatedTo",
-                # "FormOf",
-            ]
-        )
+
+        if not for_question_annotation:
+            # Disable relations of similar word forms
+            matcher.kb.disable_edges_of_relationships(
+                [
+                    "DerivedFrom",
+                    "EtymologicallyDerivedFrom",
+                    "EtymologicallyRelatedTo",
+                    "RelatedTo",
+                    "FormOf",
+                ]
+            )
+        else:
+            matcher.kb.disable_edges_of_relationships(
+                [
+                    "DerivedFrom",
+                    "EtymologicallyDerivedFrom",
+                    "EtymologicallyRelatedTo",
+                    "RelatedTo",
+                    "FormOf",
+                    "DefinedAs",
+                    # "IsA",
+                    # "MannerOf",
+                ]
+            )
         self.matcher.kb.disable_edges_with_weight_below(1)
         super(CommonsenseQAMatcher, self).__init__(tokenizer, matcher)
-        self.add_commonsense_qa_train_dataset()
-        # self.add_wordnet_definition()
-        # self.add_openbook_qa_knowledge()
-        # self.add_generics_kb()
 
-    def add_commonsense_qa_train_dataset(self):
-        logging.info("Adding Commonsense QA train dataset")
-        commonsense_qa_train_dataset_path = os.path.join(
-            dataset_cache_dir, "commonsense_qa", "train.jsonl"
-        )
+        if not for_question_annotation:
+            self.add_commonsense_qa_dataset()
+            # self.add_wordnet_definition()
+            # self.add_openbook_qa_knowledge()
+            # self.add_generics_kb()
+
+    def add_commonsense_qa_dataset(self):
+        logging.info("Adding Commonsense QA dataset")
         count = 0
-        with open(commonsense_qa_train_dataset_path, "r") as file:
-            for line in file:
-                sample = json.loads(line)
-                correct_choice = [
-                    c["text"]
-                    for c in sample["question"]["choices"]
-                    if c["label"] == sample["answerKey"]
-                ][0]
-                line = sample["question"]["stem"] + " " + correct_choice
-                if line.count(".") >= 3:
-                    continue
-                count += 1
-                ids, mask = self.tokenize_and_mask(line)
-                self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
+        for dataset_path in (
+            os.path.join(dataset_cache_dir, "commonsense_qa", "train.jsonl"),
+            # os.path.join(dataset_cache_dir, "commonsense_qa", "validate.jsonl"),
+        ):
+            with open(dataset_path, "r") as file:
+                for line in file:
+                    sample = json.loads(line)
+                    correct_choice = [
+                        c["text"]
+                        for c in sample["question"]["choices"]
+                        if c["label"] == sample["answerKey"]
+                    ][0]
+                    line = sample["question"]["stem"] + " " + correct_choice
+                    if line.count(".") >= 3:
+                        continue
+                    count += 1
+                    ids, mask = self.tokenize_and_mask(line)
+                    self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
         logging.info(f"Added {count} composite nodes")
 
     # def add_generics_kb(self):

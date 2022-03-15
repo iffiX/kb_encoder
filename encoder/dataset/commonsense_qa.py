@@ -65,6 +65,9 @@ class CommonsenseQADataset:
         if output_mode not in ("single", "splitted"):
             raise ValueError(f"Invalid output_mode {output_mode}")
         self.output_mode = output_mode
+        self.question_matcher = CommonsenseQAMatcher(
+            tokenizer=self.matcher_tokenizer, for_question_annotation=True
+        )
         self.matcher = CommonsenseQAMatcher(tokenizer=self.matcher_tokenizer)
 
         base = os.path.join(dataset_cache_dir, "commonsense_qa")
@@ -115,15 +118,19 @@ class CommonsenseQADataset:
                 self.validate_data = data["validate"]
                 self.test_data = data["test"]
 
-        self.train_disable_list = []
-        for data in self.train_data:
-            try:
-                nodes = self.matcher.matcher.kb.find_nodes(
-                    [data["text_question"] + " " + data["choices"][data["label"]]]
-                )
-            except ValueError:
-                nodes = None
-            self.train_disable_list.append(nodes)
+        self.disable_dict = {"train": [], "validate": []}
+        for split, dataset in (
+            ("train", self.train_data),
+            ("validate", self.validate_data),
+        ):
+            for data in dataset:
+                try:
+                    nodes = self.matcher.matcher.kb.find_nodes(
+                        [data["text_question"] + " " + data["choices"][data["label"]]]
+                    )
+                except ValueError:
+                    nodes = None
+                self.disable_dict[split].append(nodes)
 
         self.set_corpus()
 
@@ -184,8 +191,8 @@ class CommonsenseQADataset:
                         data["text_question"],
                         target_sentence=target,
                         target_mask=target_mask,
-                        disabled_nodes=self.train_disable_list[index]
-                        if split == "train"
+                        disabled_nodes=self.disable_dict[split][index]
+                        if split in ("train", "validate")
                         else None,
                         seed=self.matcher_seed,
                         max_times=self.matcher_config["question_match_max_times"],
@@ -222,8 +229,8 @@ class CommonsenseQADataset:
                         target_sentence=target,
                         target_mask=target_mask,
                         source_mask=choice_mask,
-                        disabled_nodes=self.train_disable_list[index]
-                        if split == "train"
+                        disabled_nodes=self.disable_dict[split][index]
+                        if split in ("train", "validate")
                         else None,
                         seed=self.matcher_seed,
                         max_times=self.matcher_config["choices_match_max_times"],
@@ -296,70 +303,91 @@ class CommonsenseQADataset:
 
                     if len(data["target"]) > 0:
                         # For supporting manually setting search targets
-                        allowed_tokens = data["target"]
+                        question_allowed_tokens = data["target"]
                     else:
-                        tokens = nltk.word_tokenize(data["text_question"])
-                        allowed_tokens = [data["question_concept"]]
-                        tagged = nltk.pos_tag(tokens)
-                        for token, pos in tagged:
-                            if pos.startswith("NN"):
-                                allowed_tokens.append(wnl.lemmatize(token))
-                        if len(allowed_tokens) < 3:
-                            for token, pos in tagged:
-                                if pos.startswith("JJ"):
-                                    allowed_tokens.append(wnl.lemmatize(token))
+                        right_choice = data["choices"][data["label"]]
+                        wrong_choices = list(
+                            set(data["choices"]).difference({right_choice})
+                        )
+                        question_allowed_tokens = [
+                            right_choice,
+                            self.question_matcher.find_closest_concept(
+                                right_choice, wrong_choices
+                            ),
+                        ]
 
-                    target = " @ ".join(sorted(list(set(allowed_tokens))))
-                    target_mask = []
-                    for c in target:
+                    question_target = " @ ".join(
+                        sorted(list(set(question_allowed_tokens)))
+                    )
+                    question_target_mask = []
+                    for c in question_target:
                         if c == "@":
-                            target_mask.append("-")
+                            question_target_mask.append("-")
                         else:
-                            target_mask.append("+")
-                    target_mask = "".join(target_mask)
+                            question_target_mask.append("+")
+                    question_target_mask = "".join(question_target_mask)
 
-                    new_question = data["text_question"]
-                    # match = self.matcher.match_by_node_embedding(
-                    #     data["text_question"] + " " + data["question_concept"],
-                    #     source_mask="-" * (len(data["text_question"]) + 1)
-                    #     + "+" * len(data["question_concept"]),
-                    #     target_sentence=" ".join(data["choices"]),
-                    #     disabled_nodes=self.train_disable_list[index]
-                    #     if split == "train"
-                    #     else None,
-                    #     seed=self.matcher_seed,
-                    #     max_times=self.matcher_config["question_match_max_times"],
-                    #     max_depth=self.matcher_config["question_match_max_depth"],
-                    #     edge_top_k=self.matcher_config["question_match_edge_top_k"],
-                    #     source_context_range=self.matcher_config[
-                    #         "question_match_source_context_range"
-                    #     ],
-                    # )
-                    # selection = self.matcher.select_paths(
-                    #     match,
-                    #     max_edges=self.matcher_config["question_select_max_edges"],
-                    #     discard_edges_if_rank_below=self.matcher_config[
-                    #         "question_select_discard_edges_if_rank_below"
-                    #     ],
-                    # )
-                    #
-                    # new_question = self.matcher.insert_selection(
-                    #     data["text_question"], selection, insert_at_end=True, sep="#"
-                    # )
+                    tokens = nltk.word_tokenize(data["text_question"])
+                    choice_allowed_tokens = [data["question_concept"]]
+                    tagged = nltk.pos_tag(tokens)
+                    for token, pos in tagged:
+                        if pos.startswith("NN"):
+                            choice_allowed_tokens.append(wnl.lemmatize(token))
+                    if len(choice_allowed_tokens) < 3:
+                        for token, pos in tagged:
+                            if pos.startswith("JJ"):
+                                choice_allowed_tokens.append(wnl.lemmatize(token))
+
+                    choice_target = " @ ".join(sorted(list(set(choice_allowed_tokens))))
+                    choice_target_mask = []
+                    for c in choice_target:
+                        if c == "@":
+                            choice_target_mask.append("-")
+                        else:
+                            choice_target_mask.append("+")
+                    choice_target_mask = "".join(choice_target_mask)
+
+                    # new_question = data["text_question"]
 
                     # new_question = self.insert_choice_by_weight_to_question(
                     #     data["text_question"], data["question_concept"], data["choices"]
                     # )
+
+                    match = self.question_matcher.match_by_node_embedding(
+                        data["text_question"],
+                        target_sentence=question_target,
+                        target_mask=question_target_mask,
+                        seed=self.matcher_seed,
+                        max_times=self.matcher_config["question_match_max_times"],
+                        max_depth=self.matcher_config["question_match_max_depth"],
+                        edge_top_k=self.matcher_config["question_match_edge_top_k"],
+                        split_node_minimum_edge_num=0,
+                        source_context_range=self.matcher_config[
+                            "question_match_source_context_range"
+                        ],
+                    )
+                    selection = self.question_matcher.select_paths(
+                        match,
+                        max_edges=self.matcher_config["question_select_max_edges"],
+                        discard_edges_if_rank_below=self.matcher_config[
+                            "question_select_discard_edges_if_rank_below"
+                        ],
+                        filter_short_accurate_paths=False,
+                    )
+
+                    new_question = self.question_matcher.insert_selection(
+                        data["text_question"], selection, insert_at_end=True, sep=",",
+                    )
 
                     new_choices = []
                     # new_choices = data["choices"]
                     for choice in data["choices"]:
                         match = self.matcher.match_by_node_embedding(
                             choice,
-                            target_sentence=target,
-                            target_mask=target_mask,
-                            disabled_nodes=self.train_disable_list[index]
-                            if split == "train"
+                            target_sentence=choice_target,
+                            target_mask=choice_target_mask,
+                            disabled_nodes=self.disable_dict[split][index]
+                            if split in ("train", "validate")
                             else None,
                             seed=self.matcher_seed,
                             max_times=self.matcher_config["choices_match_max_times"],
@@ -379,7 +407,7 @@ class CommonsenseQADataset:
 
                         new_choices.append(
                             self.matcher.insert_selection(
-                                choice, selection, insert_at_end=True, sep="#"
+                                choice, selection, insert_at_end=True
                             )
                         )
                 elif self.matcher_mode == "none":
@@ -597,6 +625,22 @@ class CommonsenseQADataset:
             )
         print("Corpus loaded, begin setting")
         self.matcher.matcher.set_corpus(corpus)
+
+    def set_search_target(self, search_target: List[str], split: str, id):
+        if split == "validate":
+            split_data = self.validate_data
+        elif split == "test":
+            split_data = self.test_data
+        else:
+            raise ValueError(f"Invalid split: {split}")
+        found_data = [d for d in split_data if d["id"] == id]
+        if len(found_data) != 1:
+            raise ValueError(f"Id {id} not found in split {split}")
+        # prevent raising an exception since sometimes the target may be empty
+        if len(search_target) == 0:
+            search_target.append("")
+
+        found_data[0]["target"] = search_target
 
     def parse_data(self, path):
         data = []

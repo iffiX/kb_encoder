@@ -20,8 +20,6 @@
 
 // A number large enough to represent unreachability, but not enough to overflow int
 #define DISTANCE_MAX 1000000
-#define SPLIT_NODE_MINIMUM_EDGE_NUM 20
-#define SPLIT_NODE_MINIMUM_SIMILARITY 0.35
 using namespace std;
 
 tuple<size_t, string> scan(const string &content, const vector<string> &delims, size_t start = 0) {
@@ -43,7 +41,7 @@ tuple<size_t, string> scan(const string &content, const vector<string> &delims, 
 bool isAllMasked(size_t start, size_t end, const vector<int> &mask) {
     bool allMasked = not mask.empty();
     if (not mask.empty()) {
-        for(size_t i = start; i < end; i++) {
+        for (size_t i = start; i < end; i++) {
             if (mask[i] == 1) {
                 allMasked = false;
                 break;
@@ -53,16 +51,16 @@ bool isAllMasked(size_t start, size_t end, const vector<int> &mask) {
     return allMasked;
 }
 
-template <typename T>
+template<typename T>
 UnorderedPair<T>::UnorderedPair(T value1, T value2) : value1(value1), value2(value2) {}
 
-template <typename T>
+template<typename T>
 bool UnorderedPair<T>::operator==(const UnorderedPair<T> &other) {
     return (value1 == other.value1 && value2 == other.value2) ||
            (value2 == other.value1 && value1 == other.value2);
 }
 
-template <typename T>
+template<typename T>
 std::size_t UnorderedPairHash<T>::operator()(const UnorderedPair<T> &pair) const {
     return hash<T>(pair.value1) ^ hash<T>(pair.value2);
 }
@@ -254,7 +252,7 @@ void KnowledgeBase::disableAllEdges() {
 }
 
 void KnowledgeBase::disableEdgesWithWeightBelow(float minWeight) {
-    for(size_t edgeIndex = 0; edgeIndex < edges.size(); edgeIndex++) {
+    for (size_t edgeIndex = 0; edgeIndex < edges.size(); edgeIndex++) {
         if (get<3>(edges[edgeIndex]) < minWeight)
             isEdgeDisabled[edgeIndex] = true;
     }
@@ -305,7 +303,7 @@ void KnowledgeBase::disableEdgesOfNodes(const vector<string> &nod) {
 #endif
 }
 
-vector<long> KnowledgeBase::findNodes(const vector<string> &nod) const {
+vector<long> KnowledgeBase::findNodes(const vector<string> &nod, bool quiet) const {
     vector<long> ids;
     for (auto &nName : nod) {
         bool found = false;
@@ -315,8 +313,13 @@ vector<long> KnowledgeBase::findNodes(const vector<string> &nod) const {
                 found = true;
             }
         }
-        if (not found)
-            throw invalid_argument(fmt::format("Node {} not found", nName));
+        if (not found) {
+            if (not quiet)
+                throw invalid_argument(fmt::format("Node {} not found", nName));
+            else
+                ids.push_back(-1);
+        }
+
     }
     return move(ids);
 }
@@ -354,7 +357,9 @@ vector<string> KnowledgeBase::getNodes(const vector<long> &nodeIndexes) const {
 void KnowledgeBase::addCompositeNode(const string &compositeNode,
                                      const string &relationship,
                                      const vector<int> &tokenizedCompositeNode,
-                                     const vector<int> &mask) {
+                                     const vector<int> &mask,
+                                     size_t split_node_minimum_edge_num,
+                                     float split_node_minimum_similarity) {
     // Note: The similaity of the composite node to other nodes is computed by:
     // the maximum sub node similarity to other nodes
 
@@ -385,7 +390,7 @@ void KnowledgeBase::addCompositeNode(const string &compositeNode,
     auto result = nodeTrie.matchForAll(tokenizedCompositeNode, false);
     unordered_map<long, float> components;
     unordered_set<long> connectedSource;
-    for(auto &subNode : result) {
+    for (auto &subNode : result) {
         size_t subNodeSize = subNode.second.back().size();
         if (isAllMasked(subNode.first, subNode.first + subNodeSize, mask))
             continue;
@@ -396,20 +401,20 @@ void KnowledgeBase::addCompositeNode(const string &compositeNode,
         size_t outSize = hasOut ? edgeFromSource.at(subNodeId).size() : 0;
         size_t inSize = hasIn ? edgeToTarget.at(subNodeId).size() : 0;
 
-        if (outSize + inSize < SPLIT_NODE_MINIMUM_EDGE_NUM) {
+        if (outSize + inSize < split_node_minimum_edge_num) {
 #ifdef DEBUG
             cout << fmt::format("Splitting node [{}:{}]", nodes[subNodeId], subNodeId) << endl;
 #endif
             unordered_map<size_t, vector<vector<int>>> subSubMatches = nodeTrie.matchForAll(
-                subNode.second.back(), true);
+                    subNode.second.back(), true);
 
-            for(auto& subSubMatch : subSubMatches) {
+            for (auto &subSubMatch : subSubMatches) {
                 // See normalize match
-                for(auto& baseMatch : subSubMatch.second) {
+                for (auto &baseMatch : subSubMatch.second) {
                     if (not isAllMasked(subSubMatch.first + subNode.first,
                                         subSubMatch.first + subNode.first + baseMatch.size(), mask)) {
                         long baseNodeId = nodeMap.at(baseMatch);
-                        if (cosineSimilarity(baseNodeId, subNodeId) > SPLIT_NODE_MINIMUM_SIMILARITY) {
+                        if (cosineSimilarity(baseNodeId, subNodeId) > split_node_minimum_similarity) {
                             if (connectedSource.find(baseNodeId) == connectedSource.end()) {
                                 connectedSource.insert(baseNodeId);
                                 addCompositeEdge(baseNodeId, relationId, newNodeId);
@@ -426,8 +431,7 @@ void KnowledgeBase::addCompositeNode(const string &compositeNode,
                     }
                 }
             }
-        }
-        else {
+        } else {
             if (connectedSource.find(subNodeId) == connectedSource.end()) {
                 connectedSource.insert(subNodeId);
                 addCompositeEdge(subNodeId, relationId, newNodeId);
@@ -457,7 +461,7 @@ void KnowledgeBase::addCompositeEdge(long sourceNodeId, long relationId, long co
     isEdgeDisabled.push_back(false);
     adjacency[compositeNodeId].insert(sourceNodeId);
     adjacency[sourceNodeId].insert(compositeNodeId);
-    tokenizedEdgeAnnotations.emplace_back(vector < int > {});
+    tokenizedEdgeAnnotations.emplace_back(vector<int>{});
 #ifdef DEBUG
     cout << fmt::format("Connecting node [{}:{}] to composite node [{}:{}] with relation [{}:{}]",
                         nodes[sourceNodeId], sourceNodeId,
@@ -586,7 +590,7 @@ void KnowledgeBase::initLandmarks(int seedNum, int landmarkNum, int seed, const 
 int KnowledgeBase::distance(long node1, long node2, bool fast) const {
     if (isNodeComposite[node1]) {
         int min = 1000000;
-        for (auto& subNode : compositeNodes.at(node1)) {
+        for (auto &subNode : compositeNodes.at(node1)) {
             int dist = distance(subNode.first, node2);
             min = dist > min ? min : dist;
         }
@@ -594,7 +598,7 @@ int KnowledgeBase::distance(long node1, long node2, bool fast) const {
     }
     if (isNodeComposite[node2]) {
         int min = 1000000;
-        for (auto& subNode : compositeNodes.at(node1)) {
+        for (auto &subNode : compositeNodes.at(node1)) {
             int dist = distance(node1, subNode.first);
             min = dist > min ? min : dist;
         }
@@ -1010,7 +1014,7 @@ void KnowledgeMatcher::setCorpus(const std::vector<std::vector<int>> &corpus) {
     for (auto &document : corpus) {
         auto result = kb.nodeTrie.matchForAll(document, false);
         unordered_set<long> insertedSubNodes;
-        for(auto &subNode : result) {
+        for (auto &subNode : result) {
             long subNodeId = kb.nodeMap.at(subNode.second.back());
             documentCountOfNodeInCorpus[subNodeId] += 1;
         }
@@ -1018,6 +1022,24 @@ void KnowledgeMatcher::setCorpus(const std::vector<std::vector<int>> &corpus) {
         bar.progress(processed, corpus.size());
     }
     bar.finish();
+}
+
+std::string KnowledgeMatcher::findClosestConcept(string targetConcept, const vector<string> &concepts) {
+    auto targetIdVec = kb.findNodes({targetConcept});
+    long targetId = targetIdVec[0];
+    vector<long> conceptIds = kb.findNodes(concepts, true);
+    size_t bestConceptIdx = 0;
+    float bestSimilarity = -1;
+    for(size_t i = 0; i < conceptIds.size(); i++) {
+        if (conceptIds[i] != -1) {
+            float similarity = kb.cosineSimilarity(targetId, conceptIds[i]);
+            if (similarity > bestSimilarity) {
+                bestConceptIdx = i;
+                bestSimilarity = similarity;
+            }
+        }
+    }
+    return concepts[bestConceptIdx];
 }
 
 KnowledgeMatcher::MatchResult
@@ -1028,6 +1050,8 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
                                        const vector<long> &disableNodes,
                                        int maxTimes, int maxDepth, int seed,
                                        int edgeTopK, int sourceContextRange, bool trim,
+                                       size_t split_node_minimum_edge_num,
+                                       float split_node_minimum_similarity,
                                        float stopSearchingEdgeIfSimilarityBelow,
                                        float sourceContextWeight) const {
     if (kb.nodeEmbeddingFileName.empty())
@@ -1062,7 +1086,9 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
                             sourceMask,
                             targetMask,
                             sourceMatch,
-                            targetMatch);
+                            targetMatch,
+                            split_node_minimum_edge_num,
+                            split_node_minimum_similarity);
 
     if (sourceMatch.empty()) {
 #ifdef DEBUG
@@ -1098,12 +1124,12 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
     }
 
     sort(nodes.begin(), nodes.end(), [](const tuple<long, size_t, size_t> &node1,
-                                        const tuple<long, size_t, size_t> &node2){
+                                        const tuple<long, size_t, size_t> &node2) {
         return get<1>(node1) < get<1>(node2);
     });
-    for(int i = 0; i < int(nodes.size()); i++) {
+    for (int i = 0; i < int(nodes.size()); i++) {
         vector<long> neighbors;
-        for(int j = i - sourceContextRange; j <= i + sourceContextRange && sourceContextRange > 0; j++) {
+        for (int j = i - sourceContextRange; j <= i + sourceContextRange && sourceContextRange > 0; j++) {
             if (j >= 0 && j != i && j < int(nodes.size())) {
                 neighbors.push_back(get<0>(nodes[j]));
             }
@@ -1154,7 +1180,7 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
         nodeLocalIndex = nodeDist(gen);
 
         rootNode = currentNode = get<0>(nodes[nodeLocalIndex]);
-        auto& neighbors = nodeContextNeighbors[nodeLocalIndex];
+        auto &neighbors = nodeContextNeighbors[nodeLocalIndex];
 
         VisitedPath path;
         path.round = i;
@@ -1207,10 +1233,9 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
                                         path.visitedNodes.find(otherNodeId) != path.visitedNodes.end(),
                                         disabledNodeSet.find(otherNodeId) != disabledNodeSet.end()) << endl;
 #endif
-                }
-                else {
+                } else {
                     float precision = 1e-4, recall = 1e-4,
-                          precision_idf_sum = 0, recall_idf_sum = 0;
+                            precision_idf_sum = 0, recall_idf_sum = 0;
                     bool isNodeComposite = kb.isNodeComposite[otherNodeId];
 
                     if (isNodeComposite) {
@@ -1278,8 +1303,7 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
                         }
                         recall /= recall_idf_sum;
                         precision /= precision_idf_sum;
-                    }
-                    else {
+                    } else {
                         float tNodeSim = -1, simToEachTarget = -1;
                         long tNodeBest = -1;
                         for (auto &tNode : targetNodes) {
@@ -1394,8 +1418,8 @@ KnowledgeMatcher::MatchResult KnowledgeMatcher::joinMatchResults(const vector<Ma
     int offset = 0;
     vector<MatchResult> matchResults = inMatchResults;
     MatchResult joinedMatchResult;
-    for(auto &result : matchResults) {
-        for(auto &path : result.visitedSubGraph.visitedPaths)
+    for (auto &result : matchResults) {
+        for (auto &path : result.visitedSubGraph.visitedPaths)
             path.round += offset;
         offset += int(result.visitedSubGraph.visitedPaths.size());
         auto &vpIn = joinedMatchResult.visitedSubGraph.visitedPaths;
@@ -1407,7 +1431,7 @@ KnowledgeMatcher::MatchResult KnowledgeMatcher::joinMatchResults(const vector<Ma
     // Sort according round number to ensure deterministic ordering
     sort(joinedMatchResult.visitedSubGraph.visitedPaths.begin(),
          joinedMatchResult.visitedSubGraph.visitedPaths.end(),
-         [](const VisitedPath &p1, const VisitedPath &p2){ return p1.round < p2.round; });
+         [](const VisitedPath &p1, const VisitedPath &p2) { return p1.round < p2.round; });
 
     return move(joinedMatchResult);
 }
@@ -1482,7 +1506,9 @@ void KnowledgeMatcher::matchForSourceAndTarget(const vector<int> &sourceSentence
                                                const vector<int> &sourceMask,
                                                const vector<int> &targetMask,
                                                unordered_map<size_t, vector<int>> &sourceMatch,
-                                               unordered_map<size_t, vector<int>> &targetMatch) const {
+                                               unordered_map<size_t, vector<int>> &targetMatch,
+                                               size_t split_node_minimum_edge_num,
+                                               float split_node_minimum_similarity) const {
     if (not sourceMask.empty() && sourceMask.size() != sourceSentence.size())
         throw invalid_argument(fmt::format(
                 "Mask is provided for source sentence but size does not match, sentence: {}, mask: {}",
@@ -1501,7 +1527,7 @@ void KnowledgeMatcher::matchForSourceAndTarget(const vector<int> &sourceSentence
         for (auto &matches : sourceMatches) {
             // Check if there exists any not masked position
             bool allMasked = true;
-            for(size_t i = 0; i < matches.second.back().size(); i++) {
+            for (size_t i = 0; i < matches.second.back().size(); i++) {
                 if (sourceMask[matches.first + i] == 1) {
                     allMasked = false;
                 }
@@ -1513,11 +1539,13 @@ void KnowledgeMatcher::matchForSourceAndTarget(const vector<int> &sourceSentence
                                               matches.second.back().end(), ","), matches.first) << endl;
 #endif
             } else
-                normalizeMatch(sourceMatch, sourceMask, matches.first, matches.second.back()); // Insert longest
+                normalizeMatch(sourceMatch, sourceMask, matches.first, matches.second.back(),
+                               split_node_minimum_edge_num, split_node_minimum_similarity); // Insert longest
         }
     } else {
         for (auto &matches : sourceMatches)
-            normalizeMatch(sourceMatch, sourceMask, matches.first, matches.second.back()); // Insert longest
+            normalizeMatch(sourceMatch, sourceMask, matches.first, matches.second.back(), split_node_minimum_edge_num,
+                           split_node_minimum_similarity); // Insert longest
     }
     if (targetSentence.empty())
         targetMatch = sourceMatch;
@@ -1527,7 +1555,7 @@ void KnowledgeMatcher::matchForSourceAndTarget(const vector<int> &sourceSentence
             for (auto &matches : targetMatches) {
                 // Check if there exists any not masked position
                 bool allMasked = true;
-                for(size_t i = 0; i < matches.second.back().size(); i++) {
+                for (size_t i = 0; i < matches.second.back().size(); i++) {
                     if (targetMask[matches.first + i] == 1) {
                         allMasked = false;
                     }
@@ -1539,11 +1567,13 @@ void KnowledgeMatcher::matchForSourceAndTarget(const vector<int> &sourceSentence
                                                   matches.second.back().end(), ","), matches.first) << endl;
 #endif
                 } else
-                    normalizeMatch(targetMatch, targetMask, matches.first, matches.second.back()); // Insert longest
+                    normalizeMatch(targetMatch, targetMask, matches.first, matches.second.back(),
+                                   split_node_minimum_edge_num, split_node_minimum_similarity); // Insert longest
             }
         } else {
             for (auto &matches : targetMatches)
-                normalizeMatch(targetMatch, targetMask, matches.first, matches.second.back()); // Insert longest
+                normalizeMatch(targetMatch, targetMask, matches.first, matches.second.back(),
+                               split_node_minimum_edge_num, split_node_minimum_similarity); // Insert longest
         }
     }
 #ifdef DEBUG
@@ -1555,29 +1585,31 @@ void KnowledgeMatcher::matchForSourceAndTarget(const vector<int> &sourceSentence
 void KnowledgeMatcher::normalizeMatch(unordered_map<size_t, vector<int>> &match,
                                       const vector<int> &mask,
                                       size_t position,
-                                      const vector<int> &node) const {
+                                      const vector<int> &node,
+                                      size_t split_node_minimum_edge_num,
+                                      float split_node_minimum_similarity) const {
     long nodeId = kb.nodeMap.at(node);
     bool hasOut = kb.edgeFromSource.find(nodeId) != kb.edgeFromSource.end();
     bool hasIn = kb.edgeToTarget.find(nodeId) != kb.edgeToTarget.end();
     size_t outSize = hasOut ? kb.edgeFromSource.at(nodeId).size() : 0;
     size_t inSize = hasIn ? kb.edgeToTarget.at(nodeId).size() : 0;
-    if (outSize + inSize < SPLIT_NODE_MINIMUM_EDGE_NUM) {
+    if (outSize + inSize < split_node_minimum_edge_num) {
 #ifdef DEBUG
         cout << fmt::format("Splitting node [{}:{}]", kb.nodes[nodeId], nodeId) << endl;
 #endif
         unordered_map<size_t, vector<vector<int>>> subMatches = kb.nodeTrie.matchForAll(node, true);
 
         size_t currentOffset = 0;
-        for(auto &subMatch : subMatches) {
+        for (auto &subMatch : subMatches) {
             // When splitting node ABC
             // Might match [A, AB, ABC], [B, BC], [C] (each bracket is a subMatch)
             // For each subMatch X, if sim(X, ABC) > minimum similarity, insert it
-            for(auto &subSubMatch : subMatch.second) {
+            for (auto &subSubMatch : subMatch.second) {
                 if (not isAllMasked(subMatch.first + position,
                                     subMatch.first + position + subSubMatch.size(),
                                     mask)) {
                     long subNodeId = kb.nodeMap.at(subSubMatch);
-                    if (kb.cosineSimilarity(subNodeId, nodeId) > SPLIT_NODE_MINIMUM_SIMILARITY) {
+                    if (kb.cosineSimilarity(subNodeId, nodeId) > split_node_minimum_similarity) {
                         match.emplace(position + subMatch.first, subSubMatch);
 #ifdef DEBUG
                         cout << fmt::format("Splitted node [{}:{}]", kb.nodes[subNodeId], subNodeId) << endl;
@@ -1590,8 +1622,7 @@ void KnowledgeMatcher::normalizeMatch(unordered_map<size_t, vector<int>> &match,
                 }
             }
         }
-    }
-    else {
+    } else {
         match.emplace(position, node);
     }
 }
@@ -1599,7 +1630,8 @@ void KnowledgeMatcher::normalizeMatch(unordered_map<size_t, vector<int>> &match,
 KnowledgeMatcher::SelectResult
 KnowledgeMatcher::selectPaths(const KnowledgeMatcher::MatchResult &inMatchResult,
                               int maxEdges,
-                              float discardEdgesIfRankBelow) const {
+                              float discardEdgesIfRankBelow,
+                              bool filterShortAccuratePaths) const {
 #ifdef DEBUG
     cout << "Begin selecting paths" << endl;
 #endif
@@ -1610,6 +1642,15 @@ KnowledgeMatcher::selectPaths(const KnowledgeMatcher::MatchResult &inMatchResult
 
     MatchResult matchResult = inMatchResult;
     auto &visitedSubGraph = matchResult.visitedSubGraph;
+
+    if (filterShortAccuratePaths) {
+        for (auto path = visitedSubGraph.visitedPaths.begin(); path != visitedSubGraph.visitedPaths.end();) {
+            if (path->edges.size() >= 1 && path->similarities[path->edges[0]] > 0.5)
+                path = visitedSubGraph.visitedPaths.erase(path);
+            else
+                path++;
+        }
+    }
 
 #pragma omp parallel for default(none) \
         shared(visitedSubGraph, pathRank) \
@@ -1650,8 +1691,7 @@ KnowledgeMatcher::selectPaths(const KnowledgeMatcher::MatchResult &inMatchResult
                 // If both of these two nodes are not composite
                 visitedSubGraph.coveredNodePairs.insert(make_pair(srcId, tarId));
                 visitedSubGraph.coveredNodePairs.insert(make_pair(tarId, srcId));
-            }
-            else {
+            } else {
                 // Prevent inserting same composite nodes
                 // (since composite nodes usually requires more space)
                 if (isSrcComposite)
@@ -1767,9 +1807,9 @@ void KnowledgeMatcher::updatePath(VisitedPath &path,
              not kb.isNodeComposite[tarId] &&
              coveredNodePairs.find(make_pair(srcId, tarId)) == coveredNodePairs.end() &&
              coveredNodePairs.find(make_pair(tarId, srcId)) == coveredNodePairs.end()) ||
-             ((kb.isNodeComposite[srcId] || kb.isNodeComposite[tarId]) &&
-              coveredCompositeNodes.find(srcId) == coveredCompositeNodes.end() &&
-              coveredCompositeNodes.find(tarId) == coveredCompositeNodes.end())) {
+            ((kb.isNodeComposite[srcId] || kb.isNodeComposite[tarId]) &&
+             coveredCompositeNodes.find(srcId) == coveredCompositeNodes.end() &&
+             coveredCompositeNodes.find(tarId) == coveredCompositeNodes.end())) {
             uncoveredEdges.emplace_back(uEdge);
             if (path.similarities.at(uEdge) * focusMultiplier > bestSimilarity) {
                 auto pair = make_pair(path.root, path.similarityTargets.at(uEdge));
@@ -1816,5 +1856,5 @@ void KnowledgeMatcher::joinVisitedSubGraph(VisitedSubGraph &vsgOut, const Visite
 
     // Sort according round number to ensure deterministic ordering
     sort(vsgOut.visitedPaths.begin(), vsgOut.visitedPaths.end(),
-         [](const VisitedPath &p1, const VisitedPath &p2){ return p1.round < p2.round; });
+         [](const VisitedPath &p1, const VisitedPath &p2) { return p1.round < p2.round; });
 }

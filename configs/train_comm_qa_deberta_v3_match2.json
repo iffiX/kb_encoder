@@ -1,29 +1,18 @@
 {
     "configs": [
         {
-            "accumulate_grad_batches": 4,
+            "accumulate_grad_batches": 2,
             "base_type": "microsoft/deberta-v3-large",
             "model_configs": {
-                "choice_predictor_dropout_prob": 0.0,
-                "adversarial_training": true,
-                "adversarial_training_use_sift": false,
-                "adversarial_training_config": {
-                    "adv_alpha": 1,
-                    "adv_epsilon": 1e-6,
-                    "adv_step_size": 1e-5,
-                    "adv_noise_var": 1e-5,
-                    "adv_k": 1,
-                    "adv_p_norm": "inf",
-                    "adv_norm_level": 0,
-                    "adv_loss": "SymKlCriterion"
-                }
+                "choice_predictor_dropout_prob": 0.0
             },
-            "batch_size": 4,
-            "epochs": 10,
+            "batch_size": 8,
+            "epochs": 20,
             "load_worker_num": 16,
             "load_prefetch_per_worker": 8,
             "l2_regularization": 0,
             "learning_rate": 6e-6,
+            "scheduler_cycles": 3,
             "scheduler_warmup_proportion": 0.1,
             "load": false,
             "max_seq_length": 180,
@@ -53,5 +42,5 @@
     "stages": [
         "commonsense_qa"
     ],
-    "working_directory": "/home/muhan/data/workspace/kb_encoder/train_comm_qa_deberta_v3_vat"
+    "working_directory": "/home/muhan/data/workspace/kb_encoder/train_comm_qa_deberta_v3_match2"
 }

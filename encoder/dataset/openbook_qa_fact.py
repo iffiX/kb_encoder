@@ -174,7 +174,6 @@ class OpenBookQAFactDataset(OpenBookQADataset):
             raise ValueError(f"Id {id} not found in split {split}")
         search_target = self.get_gold_search_target(self.fact_list[fact_idx])
         print(f"Search target of [{split}-{id}]: {search_target}")
-        search_target = search_target
         # prevent raising an exception since sometimes the target may be empty
         if len(search_target) == 0:
             search_target.append("")

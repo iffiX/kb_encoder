@@ -153,7 +153,7 @@ public:
 
     void disableEdgesOfNodes(const std::vector<std::string> &nodes);
 
-    std::vector<long> findNodes(const std::vector<std::string> &nodes) const;
+    std::vector<long> findNodes(const std::vector<std::string> &nodes, bool quiet = false) const;
 
     std::vector<Edge> getEdges(long source = -1, long target = -1) const;
 
@@ -164,7 +164,9 @@ public:
     void addCompositeNode(const std::string &compositeNode,
                           const std::string &relationship,
                           const std::vector<int> &tokenizedCompositeNode,
-                          const std::vector<int> &mask = {});
+                          const std::vector<int> &mask = {},
+                          size_t split_node_minimum_edge_num = 20,
+                          float split_node_minimum_similarity = 0.35);
 
     void addCompositeEdge(long sourceNodeId, long relationId, long compositeNodeId);
 
@@ -283,12 +285,16 @@ public:
 
     void setCorpus(const std::vector<std::vector<int>> &corpus);
 
+    std::string findClosestConcept(std::string targetConcept, const std::vector<std::string> &concepts);
+
     MatchResult
     matchByNodeEmbedding(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
                          const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
                          const std::vector<long> &disabledNodes = {},
                          int maxTimes = 100, int maxDepth = 3, int seed = -1,
                          int edgeTopK = -1, int sourceContextRange = 0, bool trimPath = true,
+                         size_t split_node_minimum_edge_num = 20,
+                         float split_node_minimum_similarity = 0.35,
                          float stopSearchingEdgeIfSimilarityBelow = 0,
                          float sourceContextWeight = 0.2) const;
 
@@ -298,7 +304,8 @@ public:
 
     SelectResult selectPaths(const MatchResult &matchResult,
                              int maxEdges,
-                             float discardEdgesIfRankBelow) const;
+                             float discardEdgesIfRankBelow,
+                             bool filterShortAccuratePaths) const;
 
     void save(const std::string &archivePath) const;
 
@@ -318,12 +325,16 @@ private:
                                  const std::vector<int> &sourceMask,
                                  const std::vector<int> &targetMask,
                                  std::unordered_map<size_t, std::vector<int>> &sourceMatch,
-                                 std::unordered_map<size_t, std::vector<int>> &targetMatch) const;
+                                 std::unordered_map<size_t, std::vector<int>> &targetMatch,
+                                 size_t split_node_minimum_edge_num,
+                                 float split_node_minimum_similarity) const;
 
     void normalizeMatch(std::unordered_map<size_t, std::vector<int>> &match,
                         const std::vector<int> &mask,
                         size_t position,
-                        const std::vector<int> &node) const;
+                        const std::vector<int> &node,
+                        size_t split_node_minimum_edge_num,
+                        float split_node_minimum_similarity) const;
 
     void trimPath(VisitedPath &path) const;
 

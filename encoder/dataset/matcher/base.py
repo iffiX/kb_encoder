@@ -1,5 +1,5 @@
-import os
 import nltk
+import spacy
 import logging
 from typing import List, Dict, Tuple, Union
 from transformers import PreTrainedTokenizerBase
@@ -37,6 +37,24 @@ class BaseMatcher:
     def __init__(self, tokenizer: PreTrainedTokenizerBase, matcher: KnowledgeMatcher):
         self.tokenizer = tokenizer
         self.matcher = matcher
+        self.nlp = None
+
+    def find_closest_concept(self, target_concept: str, concepts: List[str]):
+        if self.nlp is None:
+            self.nlp = spacy.load("en_core_web_md")
+        try:
+            return self.matcher.find_closest_concept(target_concept, concepts)
+        except ValueError:
+            target_doc = self.nlp(target_concept)
+            similarity = [
+                target_doc.similarity(self.nlp(concept)) for concept in concepts
+            ]
+            closest = concepts[similarity.index(max(similarity))]
+            logging.info(
+                f"Concept {target_concept} not found, "
+                f"use spacy to match, closest {closest}"
+            )
+            return closest
 
     def match_by_node_embedding(
         self,
@@ -51,6 +69,8 @@ class BaseMatcher:
         edge_top_k: int = -1,
         source_context_range: int = 0,
         trim_path: bool = True,
+        split_node_minimum_edge_num: int = 20,
+        split_node_minimum_similarity: float = 0.35,
         stop_searching_edge_if_similarity_below: float = 0,
         source_context_weight: float = 0.5,
     ):
@@ -82,6 +102,8 @@ class BaseMatcher:
             edge_top_k=edge_top_k,
             source_context_range=source_context_range,
             trim_path=trim_path,
+            split_node_minimum_edge_num=split_node_minimum_edge_num,
+            split_node_minimum_similarity=split_node_minimum_similarity,
             stop_searching_edge_if_similarity_below=stop_searching_edge_if_similarity_below,
             source_context_weight=source_context_weight,
             **optional_args,
@@ -99,6 +121,7 @@ class BaseMatcher:
         match,
         max_edges: int = 10,
         discard_edges_if_rank_below: Union[float, str] = 0,
+        filter_short_accurate_paths: bool = False,
     ) -> Dict[int, Tuple[int, List[List[int]], List[float]]]:
         if isinstance(discard_edges_if_rank_below, str):
             if discard_edges_if_rank_below != "auto":
@@ -106,7 +129,9 @@ class BaseMatcher:
                     "discard_edges_if_rank_below can only be set to float or 'auto'"
                 )
             discard_edges_if_rank_below = max(-match.target_node_num / 40 + 0.325, 0.2)
-        return self.matcher.select_paths(match, max_edges, discard_edges_if_rank_below)
+        return self.matcher.select_paths(
+            match, max_edges, discard_edges_if_rank_below, filter_short_accurate_paths
+        )
 
     def selection_to_list_of_strings(
         self, selection: Dict[int, Tuple[int, List[List[int]], List[float]]],

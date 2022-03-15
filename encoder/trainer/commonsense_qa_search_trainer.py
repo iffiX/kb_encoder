@@ -1,9 +1,9 @@
 import os
 import json
-import logging
 import itertools
 import warnings
 import torch as t
+import numpy as np
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 from torch.distributed import all_gather_object, get_world_size, get_rank
@@ -27,7 +27,7 @@ from encoder.utils.settings import (
 from encoder.utils.adafactor import Adafactor
 
 
-class CommonsenseQATrainer(pl.LightningModule):
+class CommonsenseQASearchTrainer(pl.LightningModule):
     def __init__(
         self,
         config: CommonsenseQATrainConfig,
@@ -73,7 +73,6 @@ class CommonsenseQATrainer(pl.LightningModule):
         else:
             model_configs = config.model_configs or {}
             self.model = Model(config.base_type, 5, **model_configs)
-        self.is_restored = False
         self._real_device = None
 
     @property
@@ -99,38 +98,26 @@ class CommonsenseQATrainer(pl.LightningModule):
         )
 
     def val_dataloader(self):
-        return DataLoader(
-            dataset=self.dataset.validate_dataset,
-            num_workers=self.config.load_worker_num,
-            prefetch_factor=self.config.load_prefetch_per_worker,
-            batch_size=self.config.batch_size,
-            collate_fn=collate_function_dict_to_batch_encoding,
-            worker_init_fn=set_worker_sharing_strategy,
-        )
-
-    def test_dataloader(self):
-        return DataLoader(
-            dataset=self.dataset.test_dataset,
-            num_workers=self.config.load_worker_num,
-            prefetch_factor=self.config.load_prefetch_per_worker,
-            batch_size=self.config.batch_size,
-            collate_fn=collate_function_dict_to_batch_encoding,
-            worker_init_fn=set_worker_sharing_strategy,
-        )
+        return [
+            DataLoader(
+                dataset=self.dataset.validate_dataset,
+                num_workers=self.config.load_worker_num,
+                prefetch_factor=self.config.load_prefetch_per_worker,
+                batch_size=self.config.batch_size,
+                collate_fn=collate_function_dict_to_batch_encoding,
+                worker_init_fn=set_worker_sharing_strategy,
+            ),
+            DataLoader(
+                dataset=self.dataset.test_dataset,
+                num_workers=self.config.load_worker_num,
+                prefetch_factor=self.config.load_prefetch_per_worker,
+                batch_size=self.config.batch_size,
+                collate_fn=collate_function_dict_to_batch_encoding,
+                worker_init_fn=set_worker_sharing_strategy,
+            ),
+        ]
 
     def on_fit_start(self):
-        if (
-            not self.is_restored
-            and self.config.previous_train_checkpoint_path is not None
-        ):
-            logging.info(
-                f"Using {self.config.previous_train_checkpoint_path} as previous phase checkpoint"
-            )
-            model = CommonsenseQATrainer.load_from_checkpoint(
-                self.config.previous_train_checkpoint_path
-            ).model
-            self.model.load_state_dict(model.state_dict())
-
         if (
             self.config.base_type.startswith("t5")
             and self.config.device_map is not None
@@ -147,11 +134,6 @@ class CommonsenseQATrainer(pl.LightningModule):
             self.model.parallelize(self.config.device_map)
         else:
             self._real_device = None
-
-        targets = self.load_targets()
-        for split, target_dict in (("validate", targets[0]), ("test", targets[1])):
-            for id, target in target_dict.items():
-                self.dataset.set_search_target(target, split, id)
 
     # noinspection PyTypeChecker
     def training_step(self, batch: BatchEncoding, batch_idx):
@@ -172,7 +154,7 @@ class CommonsenseQATrainer(pl.LightningModule):
         return out.loss
 
     # noinspection PyTypeChecker
-    def validation_step(self, batch: BatchEncoding, _batch_idx):
+    def validation_step(self, batch: BatchEncoding, _batch_idx, _dataloader_idx):
         if self.config.base_type.startswith("t5"):
             out = self.model.generate(
                 batch["sentence"].to(self.real_device),
@@ -210,62 +192,21 @@ class CommonsenseQATrainer(pl.LightningModule):
             self.validate_on_every_process(outputs)
 
     def validate_on_every_process(self, outputs):
-        batch, result = collate_and_filter_outputs(outputs)
-        if self.config.base_type.startswith("t5"):
-            metrics = self.dataset.validate_tokens(batch, result)
-        else:
-            metrics = self.dataset.validate_logits(batch, result)
-        for key, value in metrics.items():
-            self.log(key, value, prog_bar=True, sync_dist=True)
-        if not self.is_distributed or get_rank() == 0:
-            print("Validation result:")
-            for key, value in metrics.items():
-                print(f"{key}: {value}")
+        for prefix, dataloader_idx in (("val", 0), ("test", 1)):
+            batch, result = collate_and_filter_outputs(outputs[dataloader_idx])
+            self.save_targets(prefix, batch, result)
+            if dataloader_idx == 0:
+                if self.config.base_type.startswith("t5"):
+                    metrics = self.dataset.validate_tokens(batch, result)
+                else:
+                    metrics = self.dataset.validate_logits(batch, result)
 
-    def test_step(self, batch: BatchEncoding, _batch_idx):
-        if self.config.base_type.startswith("t5"):
-            out = self.model.generate(
-                batch["sentence"].to(self.real_device),
-                max_length=self.config.generate_length,
-                attention_mask=batch["mask"].to(self.real_device),
-                early_stopping=True,
-            )
-            result = t.full(
-                [out.shape[0], self.config.generate_length], self.tokenizer.pad_token_id
-            )
-            result[:, : out.shape[1]] = out.cpu()
-            batch = batch.to("cpu")
-            return {
-                "batch": batch,
-                "result": result,
-            }
-        else:
-            return {
-                "batch": batch.to("cpu"),
-                "result": self.model.predict(
-                    input_ids=batch["sentence"].to(self.real_device),
-                    attention_mask=batch["mask"].to(self.real_device),
-                    token_type_ids=batch["type_ids"].to(self.real_device),
-                ).cpu(),
-            }
-
-    def test_epoch_end(self, outputs):
-        if self.is_distributed:
-            t.cuda.set_device(self.real_device or self.device)
-            gathered_outputs = [None] * get_world_size()
-            all_gather_object(gathered_outputs, outputs)
-            gathered_outputs = list(itertools.chain.from_iterable(gathered_outputs))
-            self.test_on_main_process(gathered_outputs)
-        else:
-            self.test_on_main_process(outputs)
-
-    @rank_zero_only
-    def test_on_main_process(self, outputs):
-        _, result = collate_and_filter_outputs(outputs)
-        if self.config.base_type.startswith("t5"):
-            self.dataset.generate_test_result_tokens(result, self.stage_result_path)
-        else:
-            self.dataset.generate_test_result_logits(result, self.stage_result_path)
+                for key, value in metrics.items():
+                    self.log(key, value, prog_bar=True, sync_dist=True)
+                if not self.is_distributed or get_rank() == 0:
+                    print("Validation result:")
+                    for key, value in metrics.items():
+                        print(f"{key}: {value}")
 
     def configure_optimizers(self):
         if self.config.optimizer_class == "Adafactor":
@@ -304,15 +245,22 @@ class CommonsenseQATrainer(pl.LightningModule):
             ],
         )
 
-    def on_load_checkpoint(self, _checkpoint):
-        self.is_restored = True
-
-    def load_targets(self):
-        targets = []
-        for file_name in (
-            "commonsense_qa_val_targets.json",
-            "commonsense_qa_test_targets.json",
-        ):
-            with open(os.path.join(preprocess_cache_dir, file_name), "r") as file:
-                targets.append(json.load(file))
-        return targets
+    def save_targets(self, split, batch, logits):
+        target_dict = {}
+        logits = logits.cpu().numpy()
+        labels = np.argmax(logits, axis=1)
+        for i in range(labels.shape[0]):
+            choice = batch["choices"][i][labels[i]]
+            other_choices = list(set(batch["choices"][i]).difference({choice}))
+            targets = [
+                choice,
+                self.dataset.question_matcher.find_closest_concept(
+                    choice, other_choices
+                ),
+            ]
+            target_dict[batch["id"][i]] = targets
+        with open(
+            os.path.join(preprocess_cache_dir, f"commonsense_qa_{split}_targets.json"),
+            "w",
+        ) as file:
+            json.dump(target_dict, file)
