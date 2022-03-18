@@ -3,7 +3,7 @@ import os
 import nltk
 import json
 import logging
-import datasets
+import pickle
 from nltk.corpus import wordnet
 from transformers import PreTrainedTokenizerBase
 from encoder.dataset.matcher import ConceptNetReader, KnowledgeMatcher
@@ -210,32 +210,50 @@ class CommonsenseQAMatcher(BaseMatcher):
     def add_wordnet_definition(self):
         logging.info("Adding wordnet definition")
         added = set()
-        for ss in wordnet.all_synsets():
-            s = [ln.replace("_", " ").lower() for ln in ss.lemma_names()]
-            if s[0].count(" ") > 0:
-                continue
-            definition = (
-                ss.definition()
-                .replace("(", ",")
-                .replace(")", ",")
-                .replace(";", ",")
-                .replace('"', " ")
-                .lower()
-            )
-            # knowledge = f"{','.join(s)} is defined as {definition}"
-            knowledge = f"{s[0]} is defined as {definition}"
+        cache = os.path.join(preprocess_cache_dir, "commonsense_qa_cache_wordnet.data")
+        if not os.path.exists(cache):
+            knowledge_pairs = []
+            for ss in wordnet.all_synsets():
+                s = [ln.replace("_", " ").lower() for ln in ss.lemma_names()]
+                if s[0].count(" ") > 0:
+                    continue
+                definition = ss.definition().lower()
+                definition = re.sub(
+                    r"(\(.*followed by.*\)|\(.*informal.*\)|\(.*comparative.*\))",
+                    "",
+                    definition,
+                )
+                definition = (
+                    definition.replace("(", " ").replace(")", " ").replace('"', " ")
+                )
 
-            if len(knowledge) > 100:
-                # if trim_index = -1 this will also work, but not trimming anything
-                trim_index = knowledge.find(" ", 100)
-                knowledge = knowledge[:trim_index]
-            if knowledge not in added:
-                added.add(knowledge)
-                # Only allow definition part to be matched
-                sentence_mask = "+" * len(s[0]) + "-" * (len(knowledge) - len(s[0]))
-                ids, mask = self.tokenize_and_mask(knowledge, sentence_mask)
-                self.matcher.kb.add_composite_node(knowledge, "RelatedTo", ids, mask)
-        logging.info(f"Added {len(added)} composite nodes")
+                # knowledge = f"{','.join(s)} is defined as {definition}"
+                for sub_definition in definition.split(";"):
+                    knowledge = f"{s[0]} is {sub_definition}"
+
+                    # if len(knowledge) > 100:
+                    #     # if trim_index = -1 this will also work, but not trimming anything
+                    #     trim_index = knowledge.find(" ", 100)
+                    #     knowledge = knowledge[:trim_index]
+                    if knowledge not in added:
+                        knowledge_pairs.append((s[0], knowledge))
+                        added.add(knowledge)
+            with open(cache, "wb") as file:
+                pickle.dump(knowledge_pairs, file)
+        else:
+            with open(cache, "rb") as file:
+                knowledge_pairs = pickle.load(file)
+
+        for start, knowledge in knowledge_pairs:
+            # Only allow definition part to be connected
+            sentence_mask = "+" * len(start) + "-" * (len(knowledge) - len(start))
+            ids, mask = self.tokenize_and_mask(knowledge)
+            _, connection_mask = self.tokenize_and_mask(knowledge, sentence_mask)
+
+            self.matcher.kb.add_composite_node(
+                knowledge, "RelatedTo", ids, mask, connection_mask
+            )
+        logging.info(f"Added {len(knowledge_pairs)} composite nodes")
 
     def __reduce__(self):
         return CommonsenseQAMatcher, (self.tokenizer,)

@@ -358,6 +358,7 @@ void KnowledgeBase::addCompositeNode(const string &compositeNode,
                                      const string &relationship,
                                      const vector<int> &tokenizedCompositeNode,
                                      const vector<int> &mask,
+                                     const vector<int> &connectionMask,
                                      size_t split_node_minimum_edge_num,
                                      float split_node_minimum_similarity) {
     // Note: The similaity of the composite node to other nodes is computed by:
@@ -386,6 +387,11 @@ void KnowledgeBase::addCompositeNode(const string &compositeNode,
         throw invalid_argument(fmt::format(
                 "Mask is provided for composite node but size does not match, composite node: {}, mask: {}",
                 tokenizedCompositeNode.size(), mask.size()));
+
+    if (not connectionMask.empty() && connectionMask.size() != tokenizedCompositeNode.size())
+        throw invalid_argument(fmt::format(
+                "Connection mask is provided for composite node but size does not match, composite node: {}, connection mask: {}",
+                tokenizedCompositeNode.size(), connectionMask.size()));
 
     auto result = nodeTrie.matchForAll(tokenizedCompositeNode, false);
     unordered_map<long, float> components;
@@ -417,7 +423,10 @@ void KnowledgeBase::addCompositeNode(const string &compositeNode,
                         if (cosineSimilarity(baseNodeId, subNodeId) > split_node_minimum_similarity) {
                             if (connectedSource.find(baseNodeId) == connectedSource.end()) {
                                 connectedSource.insert(baseNodeId);
-                                addCompositeEdge(baseNodeId, relationId, newNodeId);
+                                if (not isAllMasked(subSubMatch.first + subNode.first,
+                                                    subSubMatch.first + subNode.first + baseMatch.size(), connectionMask)) {
+                                    addCompositeEdge(baseNodeId, relationId, newNodeId);
+                                }
                                 components[baseNodeId] += 1;
                                 compositeComponentCount[baseNodeId] += 1;
                             }
@@ -434,7 +443,9 @@ void KnowledgeBase::addCompositeNode(const string &compositeNode,
         } else {
             if (connectedSource.find(subNodeId) == connectedSource.end()) {
                 connectedSource.insert(subNodeId);
-                addCompositeEdge(subNodeId, relationId, newNodeId);
+                if (not isAllMasked(subNode.first, subNode.first + subNodeSize, connectionMask)) {
+                    addCompositeEdge(subNodeId, relationId, newNodeId);
+                }
                 components[subNodeId] += 1;
                 compositeComponentCount[subNodeId] += 1;
             }

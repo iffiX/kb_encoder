@@ -74,6 +74,7 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("relationship"),
                  py::arg("tokenized_composite_node"),
                  py::arg("mask") = std::vector<int>{},
+                 py::arg("connection_mask") = std::vector<int>{},
                  py::arg("split_node_minimum_edge_num") = 20,
                  py::arg("split_node_minimum_similarity") = 0.35)
             .def("add_composite_edge", &KnowledgeBase::addCompositeEdge,

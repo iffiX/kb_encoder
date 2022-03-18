@@ -165,6 +165,7 @@ public:
                           const std::string &relationship,
                           const std::vector<int> &tokenizedCompositeNode,
                           const std::vector<int> &mask = {},
+                          const std::vector<int> &connectionMask = {},
                           size_t split_node_minimum_edge_num = 20,
                           float split_node_minimum_similarity = 0.35);
 

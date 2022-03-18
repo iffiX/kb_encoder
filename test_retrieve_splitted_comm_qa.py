@@ -20,13 +20,13 @@ dataset = CommonsenseQADataset(
         "question_match_max_depth": 2,
         "question_match_edge_top_k": 10,
         "question_match_source_context_range": 0,
-        "question_select_max_edges": 6,
-        "question_select_discard_edges_if_rank_below": 0,
+        "question_select_max_edges": 4,
+        "question_select_discard_edges_if_rank_below": 0.4,
         "choices_match_max_times": 1000,
         "choices_match_max_depth": 1,
         "choices_match_edge_top_k": 10,
         "choices_match_source_context_range": 0,
-        "choices_select_max_edges": 6,
+        "choices_select_max_edges": 4,
         "choices_select_discard_edges_if_rank_below": 0,
     },
     output_mode="splitted",
@@ -55,7 +55,7 @@ if __name__ == "__main__":
     #         "rejection", ["working hard", "frustration", "defeat", "stress"],
     #     )
     # )
-    result = dataset.generator(1171, "validate")
+    result = dataset.generator(1193, "validate")
     for i in range(5):
         sentence = tokenizer.decode(
             result["sentence"][0, i], skip_special_tokens=True
