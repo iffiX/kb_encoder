@@ -1,8 +1,8 @@
+import math
 import torch as t
-from transformers import (
-    get_constant_schedule,
-    get_cosine_with_hard_restarts_schedule_with_warmup,
-)
+from transformers import get_constant_schedule
+from torch.optim.optimizer import Optimizer
+from torch.optim.lr_scheduler import LambdaLR
 from ..dataset.base import collate_function_dict_to_batch_encoding, dict_iter
 
 
@@ -38,7 +38,57 @@ def collate_and_filter_outputs(outputs):
     return batch, results
 
 
-def make_scheduler(optimizer, warmup_proportion, training_steps, num_cycles):
+def get_cosine_with_hard_restarts_schedule_with_warmup(
+    optimizer: Optimizer,
+    num_warmup_steps: int,
+    num_training_steps: int,
+    num_cycles: int = 1,
+    last_epoch: int = -1,
+    allow_continue: bool = False,
+):
+    """
+    Create a schedule with a learning rate that decreases following the values of the cosine function between the
+    initial lr set in the optimizer to 0, with several hard restarts, after a warmup period during which it increases
+    linearly between 0 and the initial lr set in the optimizer.
+    Args:
+        optimizer ([`~torch.optim.Optimizer`]):
+            The optimizer for which to schedule the learning rate.
+        num_warmup_steps (`int`):
+            The number of steps for the warmup phase.
+        num_training_steps (`int`):
+            The total number of training steps.
+        num_cycles (`int`, *optional*, defaults to 1):
+            The number of hard restarts to use.
+        last_epoch (`int`, *optional*, defaults to -1):
+            The index of the last epoch when resuming training.
+    Return:
+        `torch.optim.lr_scheduler.LambdaLR` with the appropriate schedule.
+
+    Note:
+        This modified version supports restart from the beginning if allow_continue is True
+    """
+
+    def lr_lambda(current_step):
+        if allow_continue:
+            current_step = current_step % num_warmup_steps
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+        progress = float(current_step - num_warmup_steps) / float(
+            max(1, num_training_steps - num_warmup_steps)
+        )
+        if progress >= 1.0:
+            return 0.0
+        return max(
+            0.0,
+            0.5 * (1.0 + math.cos(math.pi * ((float(num_cycles) * progress) % 1.0))),
+        )
+
+    return LambdaLR(optimizer, lr_lambda, last_epoch)
+
+
+def make_scheduler(
+    optimizer, warmup_proportion, training_steps, num_cycles, allow_continue=False
+):
     if warmup_proportion <= 0:
         return get_constant_schedule(optimizer)
     else:
@@ -47,4 +97,5 @@ def make_scheduler(optimizer, warmup_proportion, training_steps, num_cycles):
             num_warmup_steps=warmup_proportion * training_steps,
             num_training_steps=training_steps,
             num_cycles=num_cycles,
+            allow_continue=allow_continue,
         )

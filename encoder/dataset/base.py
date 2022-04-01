@@ -115,20 +115,24 @@ def collate_function_dict_to_batch_encoding(
     for k in keys:
         data_list = MovableList()
         data_list.extend([s[k] for s in samples])
-        if t.is_tensor(data_list[0]):
-            result[k] = t.cat(data_list, dim=0)
-        elif isinstance(data_list[0], int):
-            result[k] = t.tensor(data_list, dtype=t.int64)
-        elif isinstance(data_list[0], float):
-            result[k] = t.tensor(data_list, dtype=t.float32)
-        elif isinstance(data_list[0], MovableList):
-            new_data_list = MovableList()
-            for item in data_list:
-                for sub_item in item:
-                    new_data_list.append(sub_item)
-            result[k] = new_data_list
-        else:
-            result[k] = data_list
+        try:
+            if t.is_tensor(data_list[0]):
+                result[k] = t.cat(data_list, dim=0)
+            elif isinstance(data_list[0], int):
+                result[k] = t.tensor(data_list, dtype=t.int64)
+            elif isinstance(data_list[0], float):
+                result[k] = t.tensor(data_list, dtype=t.float32)
+            elif isinstance(data_list[0], MovableList):
+                new_data_list = MovableList()
+                for item in data_list:
+                    for sub_item in item:
+                        new_data_list.append(sub_item)
+                result[k] = new_data_list
+            else:
+                result[k] = data_list
+        except Exception as e:
+            print(f"\nKey:{k}\nInput:\n{data_list}")
+            raise e
     return BatchEncoding(data=result)
 
 

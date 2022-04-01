@@ -9,28 +9,28 @@
             "batch_size": 8,
             "epochs": 20,
             "load_worker_num": 16,
-            "load_prefetch_per_worker": 8,
+            "load_prefetch_per_worker": 16,
             "l2_regularization": 0,
-            "learning_rate": 9e-6,
+            "learning_rate": 6e-6,
             "scheduler_cycles": 3,
             "scheduler_warmup_proportion": 0.1,
             "load": false,
-            "max_seq_length": 100,
+            "max_seq_length": 200,
             "optimizer_class": "AdamW",
             "use_matcher": true,
             "matcher_mode": "embedding",
             "matcher_config": {
                 "question_match_max_times": 1000,
-                "question_match_max_depth": 2,
+                "question_match_max_depth": 1,
                 "question_match_edge_top_k": 10,
                 "question_match_source_context_range": 0,
-                "question_select_max_edges": 4,
+                "question_select_max_edges": 2,
                 "question_select_discard_edges_if_rank_below": 0.4,
                 "choices_match_max_times": 1000,
                 "choices_match_max_depth": 1,
                 "choices_match_edge_top_k": 10,
                 "choices_match_source_context_range": 0,
-                "choices_select_max_edges": 0,
+                "choices_select_max_edges": 2,
                 "choices_select_discard_edges_if_rank_below": 0
             },
             "seed": 697474,
@@ -40,7 +40,7 @@
     "early_stopping_patience": 15,
     "gpus": [0],
     "stages": [
-        "commonsense_qa"
+        "arc"
     ],
-    "working_directory": "/home/muhan/data/workspace/kb_encoder/train_comm_qa_deberta_v3_match"
+    "working_directory": "/home/muhan/data/workspace/kb_encoder/train_arc"
 }

@@ -12,31 +12,22 @@ import random
 from typing import List
 from nltk.stem import WordNetLemmatizer
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, BatchEncoding
+from encoder.dataset.download import OpenBookQA
 from encoder.dataset.matcher.openbook_qa import OpenBookQAMatcher
 from encoder.utils.settings import (
-    dataset_cache_dir,
     preprocess_cache_dir,
     proxies,
     model_cache_dir,
     huggingface_mirror,
     local_files_only,
 )
-from encoder.utils.file import (
-    open_file_with_create_directories,
-    download_to,
-    decompress_zip,
-)
+from encoder.utils.file import open_file_with_create_directories
 from encoder.utils.inspect import save_inspect_data
 from .utils import num2word
 from .base import StaticIterableDataset
 
 
 class OpenBookQADataset:
-    OPENBOOK_QA_URL = (
-        "https://ai2-public-datasets.s3.amazonaws.com/open-book-qa/"
-        "OpenBookQA-V1-Sep2018.zip"
-    )
-
     def __init__(
         self,
         tokenizer: PreTrainedTokenizerBase,
@@ -84,42 +75,13 @@ class OpenBookQADataset:
             raise ValueError(f"Invalid output_mode {output_mode}")
         self.output_mode = output_mode
         self.matcher = OpenBookQAMatcher(tokenizer=self.matcher_tokenizer)
+        self.openbook_qa = OpenBookQA().require()
 
-        openbook_qa_path = os.path.join(dataset_cache_dir, "openbook_qa")
-        # Note: fact is not directly used in train/test/validation
-        train_path = os.path.join(
-            openbook_qa_path,
-            "OpenBookQA-V1-Sep2018",
-            "Data",
-            "Additional",
-            "train_complete.jsonl",
-        )
-        validate_path = os.path.join(
-            openbook_qa_path,
-            "OpenBookQA-V1-Sep2018",
-            "Data",
-            "Additional",
-            "dev_complete.jsonl",
-        )
-        test_path = os.path.join(
-            openbook_qa_path,
-            "OpenBookQA-V1-Sep2018",
-            "Data",
-            "Additional",
-            "test_complete.jsonl",
-        )
         archive_path = os.path.join(preprocess_cache_dir, "openbook_qa.data")
-        if not os.path.exists(openbook_qa_path):
-            if not os.path.exists(str(openbook_qa_path) + ".zip"):
-                logging.info("Downloading OpenBook QA")
-                download_to(self.OPENBOOK_QA_URL, str(openbook_qa_path) + ".zip")
-            logging.info("Decompressing")
-            decompress_zip(str(openbook_qa_path) + ".zip", openbook_qa_path)
-
         if not os.path.exists(archive_path):
-            self.train_data = self.parse_data(train_path)
-            self.validate_data = self.parse_data(validate_path)
-            self.test_data = self.parse_data(test_path)
+            self.train_data = self.parse_data(self.openbook_qa.train_path)
+            self.validate_data = self.parse_data(self.openbook_qa.validate_path)
+            self.test_data = self.parse_data(self.openbook_qa.test_path)
             self.save(archive_path)
         else:
             with open_file_with_create_directories(archive_path, "rb") as file:
@@ -136,9 +98,9 @@ class OpenBookQADataset:
                     logging.info(
                         "Configuration mismatch, regenerating OpenBook QA dataset."
                     )
-                    self.train_data = self.parse_data(train_path)
-                    self.validate_data = self.parse_data(validate_path)
-                    self.test_data = self.parse_data(test_path)
+                    self.train_data = self.parse_data(self.openbook_qa.train_path)
+                    self.validate_data = self.parse_data(self.openbook_qa.validate_path)
+                    self.test_data = self.parse_data(self.openbook_qa.test_path)
                     self.save(archive_path)
                 else:
                     raise ValueError("Configuration mismatch")
@@ -698,7 +660,7 @@ class OpenBookQADataset:
             else:
                 time_diff = (month_1 + 12 - month_2) % 12
             unit, unit_scale = generator.choice(
-                ##[("month", 1), ("week", 4), ("day", 30)]
+                # [("month", 1), ("week", 4), ("day", 30)]
                 [("month", 1)]
             )
             wrong_months = months[:month_2] + months[month_2 + 1 :]
@@ -795,7 +757,6 @@ class OpenBookQADataset:
         append_train_data = []
         delete_train_data = set()
         data = self.train_data
-        train_data_num = len(data)
         available_choices = list(
             set([ch for train_data in data for ch in train_data["choices"]]).difference(
                 {"all of these", "none of these"}

@@ -3,19 +3,21 @@ import os
 import json
 import logging
 from transformers import PreTrainedTokenizerBase
-from encoder.dataset.download import ConceptNet, OpenBookQA
+from encoder.dataset.download import ConceptNet, OpenBookQA, ARC, QASC
 from encoder.dataset.matcher import ConceptNetReader, KnowledgeMatcher
 from encoder.dataset.matcher.base import BaseMatcher
 from encoder.utils.settings import preprocess_cache_dir
 
 
-class OpenBookQAMatcher(BaseMatcher):
+class ARCMatcher(BaseMatcher):
     def __init__(self, tokenizer: PreTrainedTokenizerBase):
         archive_path = str(
             os.path.join(preprocess_cache_dir, "conceptnet-archive.data")
         )
         self.concept_net = ConceptNet().require()
         self.openbook_qa = OpenBookQA().require()
+        self.arc = ARC().require()
+        self.qasc = QASC().require()
 
         if not os.path.exists(archive_path):
             logging.info("Processing concept net")
@@ -44,53 +46,58 @@ class OpenBookQAMatcher(BaseMatcher):
         else:
             logging.info("Initializing KnowledgeMatcher")
             matcher = KnowledgeMatcher(archive_path)
-        super(OpenBookQAMatcher, self).__init__(tokenizer, matcher)
+        super(ARCMatcher, self).__init__(tokenizer, matcher)
 
+        matcher.kb.disable_edges_of_relationships(
+            [
+                "DerivedFrom",
+                "EtymologicallyDerivedFrom",
+                "EtymologicallyRelatedTo",
+                "RelatedTo",
+                "FormOf",
+                "DefinedAs",
+            ]
+        )
         self.matcher.kb.disable_edges_with_weight_below(1)
 
-        # Add knowledge from openbook QA as composite nodes
-        self.add_openbook_qa_knowledge()
-        # self.add_openbook_qa_train_dataset()
+        # Add knowledge as composite nodes
+        self.add_additional_knowledge()
 
-    def add_openbook_qa_knowledge(self):
-        logging.info("Adding OpenBook QA knowledge")
-        # qasc_additional_path = os.path.join(preprocess_cache_dir, "qasc_additional.txt")
-        manual_additional_path = os.path.join(
-            preprocess_cache_dir, "manual_additional.txt"
-        )
+    def add_additional_knowledge(self):
+        logging.info("Adding additional knowledge")
         count = 0
+        for fact in self.generate_facts():
+            fact = fact.strip("\n").strip(".").strip('"').strip("'").strip(",")
+            if len(fact) < 3:
+                continue
+            count += 1
+            ids, mask = self.tokenize_and_mask(fact)
+            self.matcher.kb.add_composite_node(fact, "RelatedTo", ids, mask)
+        logging.info(f"Added {count} composite nodes")
+
+    def generate_facts(self):
+        facts = set()
         for path in (
-            self.openbook_qa.facts_path,
-            self.openbook_qa.crowd_source_facts_path,
-            # qasc_additional_path,
-            manual_additional_path,
+            self.qasc.train_path,
+            self.qasc.validate_path,
         ):
             with open(path, "r") as file:
                 for line in file:
-                    line = line.strip("\n").strip(".").strip('"').strip("'").strip(",")
+                    entry = json.loads(line)
+                    facts.add(entry["fact1"].strip(".").lower())
+                    facts.add(entry["fact2"].strip(".").lower())
+        for path in (
+            self.openbook_qa.facts_path,
+            self.openbook_qa.crowd_source_facts_path,
+        ):
+            with open(path, "r") as file:
+                for line in file:
+                    line = line.strip("\n").strip('"').strip(".")
                     if len(line) < 3:
                         continue
-                    count += 1
-                    ids, mask = self.tokenize_and_mask(line)
-                    self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
-        logging.info(f"Added {count} composite nodes")
-
-    def add_openbook_qa_train_dataset(self):
-        logging.info("Adding OpenBook QA train dataset")
-        count = 0
-        with open(self.openbook_qa.train_path, "r") as file:
-            for line in file:
-                sample = json.loads(line)
-                correct_choice = [
-                    c["text"]
-                    for c in sample["question"]["choices"]
-                    if c["label"] == sample["answerKey"]
-                ][0]
-                line = sample["question"]["stem"] + " " + correct_choice
-                count += 1
-                ids, mask = self.tokenize_and_mask(line)
-                self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
-        logging.info(f"Added {count} composite nodes")
+                    facts.add(line.lower())
+        logging.info(f"Generated {len(facts)} facts")
+        return list(facts)
 
     def __reduce__(self):
-        return OpenBookQAMatcher, (self.tokenizer,)
+        return ARCMatcher, (self.tokenizer,)

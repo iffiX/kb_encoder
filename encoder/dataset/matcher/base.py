@@ -4,18 +4,9 @@ import logging
 from typing import List, Dict, Tuple, Union
 from transformers import PreTrainedTokenizerBase
 from encoder.dataset.matcher import KnowledgeMatcher
-from encoder.utils.settings import preprocess_cache_dir
 
 
 class BaseMatcher:
-    ASSERTION_URL = (
-        "https://s3.amazonaws.com/conceptnet/downloads/2019/edges/"
-        "conceptnet-assertions-5.7.0.csv.gz"
-    )
-    NUMBERBATCH_URL = (
-        "https://conceptnet.s3.amazonaws.com/downloads/2019/"
-        "numberbatch/numberbatch-en-19.08.txt.gz"
-    )
     VERB_FILTER_SET = {
         "do",
         "did",
@@ -197,6 +188,44 @@ class BaseMatcher:
                 sentence_tokens = sentence_tokens[:pos] + ss[1] + sentence_tokens[pos:]
                 offset += len(ss[1])
         return self.tokenizer.decode(sentence_tokens)
+
+    def insert_selection_at_end_preserve_case(
+        self,
+        sentence: str,
+        selection: Dict[int, Tuple[int, List[List[int]], List[float]]],
+        begin: str = "(",
+        sep: str = ",",
+        end: str = ")",
+        include_weights: bool = False,
+    ) -> str:
+        if len(selection) == 0:
+            return sentence
+        begin_tokens = self.tokenizer.encode(begin, add_special_tokens=False)
+        end_tokens = self.tokenizer.encode(end, add_special_tokens=False)
+        sep_tokens = self.tokenizer.encode(sep, add_special_tokens=False)
+        new_matches = {}
+        knowledge_tokens = []
+        for pos, (_, edges, weights) in selection.items():
+            new_edges = []
+            for i, (edge, weight) in enumerate(zip(edges, weights)):
+                if include_weights:
+                    new_edges += edge + self.tokenizer.encode(
+                        f"{weight:.1f}", add_special_tokens=False
+                    )
+                else:
+                    new_edges += edge
+                new_edges += sep_tokens
+            new_matches[pos] = new_edges
+        sorted_selection = list(
+            (k, v) for k, v in new_matches.items()
+        )  # type: List[Tuple[int, List[int]]]
+        sorted_selection = sorted(sorted_selection, key=lambda x: x[0])
+
+        knowledge_tokens += begin_tokens
+        for ss in sorted_selection:
+            knowledge_tokens = knowledge_tokens + ss[1]
+        knowledge_tokens += end_tokens
+        return sentence + " " + self.tokenizer.decode(knowledge_tokens)
 
     def tokenize_and_mask(self, sentence: str, sentence_mask: str = ""):
         """

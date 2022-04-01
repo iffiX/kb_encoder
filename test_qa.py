@@ -10,7 +10,7 @@ if __name__ == "__main__":
         question = input("Q?")
         answer = input("A?")
         trainer.model.to("cuda:0")
-        encoding = trainer.tokenizer(
+        encoding = trainer.retriever_tokenizer(
             question,
             answer,
             padding="max_length",
@@ -26,7 +26,11 @@ if __name__ == "__main__":
                 early_stopping=True,
             )
             print("Result:")
-            print(trainer.tokenizer.decode(out[0].to("cpu"), skip_special_tokens=True))
+            print(
+                trainer.retriever_tokenizer.decode(
+                    out[0].to("cpu"), skip_special_tokens=True
+                )
+            )
         else:
             choice_num = trainer.model.choice_num
             out = trainer.model.predict(

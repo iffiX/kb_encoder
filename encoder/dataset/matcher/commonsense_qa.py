@@ -1,66 +1,30 @@
 import re
 import os
-import nltk
 import json
 import logging
-import pickle
-from nltk.corpus import wordnet
 from transformers import PreTrainedTokenizerBase
+from encoder.dataset.download import ConceptNet, CommonsenseQA
 from encoder.dataset.matcher import ConceptNetReader, KnowledgeMatcher
 from encoder.dataset.matcher.base import BaseMatcher
-from encoder.utils.settings import dataset_cache_dir, preprocess_cache_dir
-from encoder.utils.file import download_to, decompress_gz
+from encoder.utils.settings import preprocess_cache_dir
 
 
 class CommonsenseQAMatcher(BaseMatcher):
-    ASSERTION_URL = (
-        "https://s3.amazonaws.com/conceptnet/downloads/2019/edges/"
-        "conceptnet-assertions-5.7.0.csv.gz"
-    )
-    NUMBERBATCH_URL = (
-        "https://conceptnet.s3.amazonaws.com/downloads/2019/"
-        "numberbatch/numberbatch-en-19.08.txt.gz"
-    )
-    TRAIN_URL = "https://s3.amazonaws.com/commensenseqa/train_rand_split.jsonl"
-
     def __init__(
         self, tokenizer: PreTrainedTokenizerBase, for_question_annotation=False
     ):
-        assertion_path = str(
-            os.path.join(dataset_cache_dir, "conceptnet-assertions.csv")
-        )
-        numberbatch_path = str(
-            os.path.join(dataset_cache_dir, "conceptnet-numberbatch.txt")
-        )
-        embedding_path = str(
-            os.path.join(preprocess_cache_dir, "conceptnet-embedding.hdf5")
-        )
         archive_path = str(
             os.path.join(preprocess_cache_dir, "conceptnet-archive.data")
         )
-        train_path = os.path.join(dataset_cache_dir, "commonsense_qa", "train.jsonl")
-
-        for task, data_path, url in (
-            ("assertions", assertion_path, self.ASSERTION_URL),
-            ("numberbatch", numberbatch_path, self.NUMBERBATCH_URL),
-        ):
-            if not os.path.exists(data_path):
-                if not os.path.exists(str(data_path) + ".gz"):
-                    logging.info(f"Downloading concept net {task}")
-                    download_to(url, str(data_path) + ".gz")
-                logging.info("Decompressing")
-                decompress_gz(str(data_path) + ".gz", data_path)
-
-        if not os.path.exists(train_path):
-            logging.info("Downloading commonsense qa train dataset.")
-            download_to(self.TRAIN_URL, train_path)
+        self.concept_net = ConceptNet().require()
+        self.commonsense_qa = CommonsenseQA().require()
 
         if not os.path.exists(archive_path):
             logging.info("Processing concept net")
             reader = ConceptNetReader().read(
-                asserion_path=assertion_path,
-                weight_path=numberbatch_path,
-                weight_hdf5_path=embedding_path,
+                asserion_path=self.concept_net.assertion_path,
+                weight_path=self.concept_net.numberbatch_path,
+                weight_hdf5_path=self.concept_net.embedding_path,
                 simplify_with_int8=True,
             )
             reader.tokenized_nodes = tokenizer(
@@ -120,8 +84,8 @@ class CommonsenseQAMatcher(BaseMatcher):
         logging.info("Adding Commonsense QA dataset")
         count = 0
         for dataset_path in (
-            os.path.join(dataset_cache_dir, "commonsense_qa", "train.jsonl"),
-            # os.path.join(dataset_cache_dir, "commonsense_qa", "validate.jsonl"),
+            self.commonsense_qa.train_path,
+            # self.commonsense_qa.validate_path,
         ):
             with open(dataset_path, "r") as file:
                 for line in file:
@@ -207,53 +171,7 @@ class CommonsenseQAMatcher(BaseMatcher):
     #                 self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
     #     logging.info(f"Added {count} composite nodes")
 
-    def add_wordnet_definition(self):
-        logging.info("Adding wordnet definition")
-        added = set()
-        cache = os.path.join(preprocess_cache_dir, "commonsense_qa_cache_wordnet.data")
-        if not os.path.exists(cache):
-            knowledge_pairs = []
-            for ss in wordnet.all_synsets():
-                s = [ln.replace("_", " ").lower() for ln in ss.lemma_names()]
-                if s[0].count(" ") > 0:
-                    continue
-                definition = ss.definition().lower()
-                definition = re.sub(
-                    r"(\(.*followed by.*\)|\(.*informal.*\)|\(.*comparative.*\))",
-                    "",
-                    definition,
-                )
-                definition = (
-                    definition.replace("(", " ").replace(")", " ").replace('"', " ")
-                )
-
-                # knowledge = f"{','.join(s)} is defined as {definition}"
-                for sub_definition in definition.split(";"):
-                    knowledge = f"{s[0]} is {sub_definition}"
-
-                    # if len(knowledge) > 100:
-                    #     # if trim_index = -1 this will also work, but not trimming anything
-                    #     trim_index = knowledge.find(" ", 100)
-                    #     knowledge = knowledge[:trim_index]
-                    if knowledge not in added:
-                        knowledge_pairs.append((s[0], knowledge))
-                        added.add(knowledge)
-            with open(cache, "wb") as file:
-                pickle.dump(knowledge_pairs, file)
-        else:
-            with open(cache, "rb") as file:
-                knowledge_pairs = pickle.load(file)
-
-        for start, knowledge in knowledge_pairs:
-            # Only allow definition part to be connected
-            sentence_mask = "+" * len(start) + "-" * (len(knowledge) - len(start))
-            ids, mask = self.tokenize_and_mask(knowledge)
-            _, connection_mask = self.tokenize_and_mask(knowledge, sentence_mask)
-
-            self.matcher.kb.add_composite_node(
-                knowledge, "RelatedTo", ids, mask, connection_mask
-            )
-        logging.info(f"Added {len(knowledge_pairs)} composite nodes")
+    #
 
     def __reduce__(self):
         return CommonsenseQAMatcher, (self.tokenizer,)

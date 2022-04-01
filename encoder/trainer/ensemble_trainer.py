@@ -133,7 +133,7 @@ class EnsembleTrainer(pl.LightningModule):
     def select_answer(self, outputs):
         batch = None
         answers_dict = {}
-        tokenizer = self.trainers[0].tokenizer
+        tokenizer = self.trainers[0].retriever_tokenizer
         all_batches = {}
         for i in range(len(self.trainers)):
             batch, tokens = collate_and_filter_outputs(outputs[i])

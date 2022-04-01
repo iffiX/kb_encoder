@@ -7,6 +7,12 @@ from .commonsense_qa_search_trainer import CommonsenseQASearchTrainer
 from .commonsense_qa_trainer import CommonsenseQATrainer
 from .openbook_qa_trainer import OpenBookQATrainer
 from .openbook_qa_fact_trainer import OpenBookQAFactTrainer
+from .openbook_qa_chained_sequence_trainer import OpenBookQAChainedSequenceTrainer
+from .openbook_qa_chained_sequence_fact_trainer import (
+    OpenBookQAChainedSequenceFactTrainer,
+)
+from .arc_trainer import ARCTrainer
+from .arc_search_trainer import ARCSearchTrainer
 from .ensemble_trainer import EnsembleTrainer
 from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
@@ -18,6 +24,10 @@ stage_name_to_trainer_map = {
     "commonsense_qa_search": CommonsenseQASearchTrainer,
     "openbook_qa": OpenBookQATrainer,
     "openbook_qa_fact": OpenBookQAFactTrainer,
+    "openbook_qa_chained_sequence": OpenBookQAChainedSequenceTrainer,
+    "openbook_qa_chained_sequence_fact": OpenBookQAChainedSequenceFactTrainer,
+    "arc": ARCTrainer,
+    "arc_search": ARCSearchTrainer,
     "ensemble": EnsembleTrainer,
 }
 
@@ -43,7 +53,9 @@ def find_checkpoint(
             f"Finding checkpoint with monitor={monitor}, monitor_mode={monitor_mode}"
         )
         for file in os.listdir(checkpoint_path):
-            if re.search(f"{monitor}=([+-]?([0-9]*[.])?[0-9]+)", file) is not None:
+            if re.search(
+                f"{monitor}=([+-]?([0-9]*[.])?[0-9]+)", file
+            ) is not None and file.endswith(".ckpt"):
                 available_files.append(file)
         sorted_by_epoch = sorted(
             available_files,
@@ -134,6 +146,9 @@ def _train(
         plugins=[DDPPlugin(find_unused_parameters=True)] if is_distributed else None,
         callbacks=[checkpoint_callback, early_stopping],
         logger=[t_logger],
+        reload_dataloaders_every_epoch=True
+        if isinstance(stage_trainer, ARCSearchTrainer)
+        else False,
         limit_train_batches=getattr(stage_config, "train_steps", None) or 1.0,
         limit_val_batches=getattr(stage_config, "validate_steps", None) or 1.0,
         num_sanity_val_steps=0 if type(stage_trainer) == EnsembleTrainer else 2,

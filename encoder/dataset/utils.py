@@ -1,3 +1,14 @@
+from typing import List
+from torch import nn
+from transformers import MarianMTModel, MarianTokenizer
+from encoder.utils.settings import (
+    model_cache_dir,
+    proxies,
+    huggingface_mirror,
+    local_files_only,
+)
+
+
 def num2word(num):
     ones = {
         1: "one",
@@ -103,3 +114,56 @@ def num2word(num):
         word = left + " " + right
     word = word.replace(" zero hundred", "").replace(" zero thousand", " thousand")
     return word
+
+
+class Translator(nn.Module):
+    def __init__(
+        self,
+        src_model="Helsinki-NLP/opus-mt-en-ROMANCE",
+        tar_model="Helsinki-NLP/opus-mt-ROMANCE-en",
+    ):
+        super(Translator, self).__init__()
+        download_args = {
+            "cache_dir": model_cache_dir,
+            "proxies": proxies,
+            "mirror": huggingface_mirror,
+            "local_files_only": local_files_only,
+        }
+        self.src_tokenizer = MarianTokenizer.from_pretrained(src_model, **download_args)
+        self.src_model = MarianMTModel.from_pretrained(src_model, **download_args)
+        self.tar_tokenizer = MarianTokenizer.from_pretrained(tar_model, **download_args)
+        self.tar_model = MarianMTModel.from_pretrained(tar_model, **download_args)
+
+    def translate(self, texts: List[str], language="fr"):
+        # Prepare the text data into appropriate format for the model
+        template = (
+            lambda text: f"{text}" if language == "en" else f">>{language}<< {text}"
+        )
+        src_texts = [template(text) for text in texts]
+
+        if language != "en":
+            tokenizer, model = self.src_tokenizer, self.src_model
+        else:
+            tokenizer, model = self.tar_tokenizer, self.tar_model
+
+        # Tokenize the texts
+        encoded = tokenizer(
+            src_texts, padding=True, truncation=True, return_tensors="pt"
+        )
+
+        # Generate translation using model
+        translated = model.generate(**encoded)
+
+        # Convert the generated tokens indices back into text
+        translated_texts = tokenizer.batch_decode(translated, skip_special_tokens=True)
+
+        return translated_texts
+
+    def back_translate(self, texts: List[str], intermediate_lang="fr") -> List[str]:
+        # Translate from source to target language
+        translated_texts = self.translate(texts, language=intermediate_lang)
+
+        # Translate from target language back to source language
+        back_translated_texts = self.translate(translated_texts, language="en")
+
+        return back_translated_texts

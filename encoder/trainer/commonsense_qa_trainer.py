@@ -9,12 +9,7 @@ from torch.utils.data import DataLoader
 from torch.distributed import all_gather_object, get_world_size, get_rank
 from transformers import T5ForConditionalGeneration, AutoTokenizer, BatchEncoding
 from pytorch_lightning.utilities import rank_zero_only
-from .utils import (
-    collate_and_filter_outputs,
-    set_worker_sharing_strategy,
-    make_scheduler,
-)
-from encoder.model.deberta.model import Model
+from encoder.model.model import Model
 from encoder.dataset.base import collate_function_dict_to_batch_encoding
 from encoder.dataset.commonsense_qa import CommonsenseQADataset
 from encoder.utils.config import CommonsenseQATrainConfig, fix_missing
@@ -25,6 +20,11 @@ from encoder.utils.settings import (
     huggingface_mirror,
 )
 from encoder.utils.adafactor import Adafactor
+from .utils import (
+    collate_and_filter_outputs,
+    set_worker_sharing_strategy,
+    make_scheduler,
+)
 
 
 class CommonsenseQATrainer(pl.LightningModule):

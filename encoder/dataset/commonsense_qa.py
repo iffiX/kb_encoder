@@ -10,21 +10,15 @@ import torch as t
 from typing import List
 from nltk.stem import WordNetLemmatizer
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, BatchEncoding
+from encoder.dataset.download import CommonsenseQA
 from encoder.dataset.matcher.commonsense_qa import CommonsenseQAMatcher
-from encoder.utils.settings import (
-    dataset_cache_dir,
-    preprocess_cache_dir,
-)
-from encoder.utils.file import open_file_with_create_directories, download_to
+from encoder.utils.settings import preprocess_cache_dir
+from encoder.utils.file import open_file_with_create_directories
 from encoder.utils.inspect import save_inspect_data
 from .base import StaticIterableDataset
 
 
 class CommonsenseQADataset:
-    TRAIN_URL = "https://s3.amazonaws.com/commensenseqa/train_rand_split.jsonl"
-    VALIDATE_URL = "https://s3.amazonaws.com/commensenseqa/dev_rand_split.jsonl"
-    TEST_URL = "https://s3.amazonaws.com/commensenseqa/test_rand_split_no_answers.jsonl"
-
     def __init__(
         self,
         tokenizer: PreTrainedTokenizerBase,
@@ -69,28 +63,13 @@ class CommonsenseQADataset:
             tokenizer=self.matcher_tokenizer, for_question_annotation=True
         )
         self.matcher = CommonsenseQAMatcher(tokenizer=self.matcher_tokenizer)
+        self.commonsense_qa = CommonsenseQA().require()
 
-        base = os.path.join(dataset_cache_dir, "commonsense_qa")
-        train_path = os.path.join(base, "train.jsonl")
-        validate_path = os.path.join(base, "validate.jsonl")
-        test_path = os.path.join(base, "test.jsonl")
         archive_path = os.path.join(preprocess_cache_dir, "commonsense_qa.data")
-        if not os.path.exists(train_path):
-            logging.info("Downloading commonsense qa train dataset.")
-            download_to(self.TRAIN_URL, train_path)
-
-        if not os.path.exists(validate_path):
-            logging.info("Downloading commonsense qa validate dataset.")
-            download_to(self.VALIDATE_URL, validate_path)
-
-        if not os.path.exists(test_path):
-            logging.info("Downloading commonsense qa test dataset.")
-            download_to(self.TEST_URL, test_path)
-
         if not os.path.exists(archive_path):
-            self.train_data = self.parse_data(train_path)
-            self.validate_data = self.parse_data(validate_path)
-            self.test_data = self.parse_data(test_path)
+            self.train_data = self.parse_data(self.commonsense_qa.train_path)
+            self.validate_data = self.parse_data(self.commonsense_qa.validate_path)
+            self.test_data = self.parse_data(self.commonsense_qa.test_path)
             self.save(archive_path)
         else:
             with open_file_with_create_directories(archive_path, "rb") as file:
@@ -107,9 +86,11 @@ class CommonsenseQADataset:
                     logging.info(
                         "Configuration mismatch, regenerating commonsense qa dataset."
                     )
-                    self.train_data = self.parse_data(train_path)
-                    self.validate_data = self.parse_data(validate_path)
-                    self.test_data = self.parse_data(test_path)
+                    self.train_data = self.parse_data(self.commonsense_qa.train_path)
+                    self.validate_data = self.parse_data(
+                        self.commonsense_qa.validate_path
+                    )
+                    self.test_data = self.parse_data(self.commonsense_qa.test_path)
                     self.save(archive_path)
                 else:
                     raise ValueError("Configuration mismatch")
@@ -495,7 +476,8 @@ class CommonsenseQADataset:
             tokens = batch["sentence"][i]
             if tokens.dim() > 1:
                 sentences = [
-                    self.tokenizer.decode(t, skip_special_tokens=True) for t in tokens
+                    self.tokenizer.decode(tok, skip_special_tokens=True)
+                    for tok in tokens
                 ]
                 if answer != ref_answer:
                     for j, sentence in enumerate(sentences):

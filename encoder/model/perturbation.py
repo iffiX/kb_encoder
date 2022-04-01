@@ -81,7 +81,7 @@ class SmartPerturbation:
                 token_type_ids,
                 *wargs,
                 inputs_embeds=embed + noise,
-                **kwargs
+                **kwargs,
             )
             adv_loss = stable_kl(adv_logits, logits.detach(), reduce=False)
             (delta_grad,) = torch.autograd.grad(
@@ -107,14 +107,6 @@ class SmartPerturbation:
         return adv_loss, norm, adv_logits
 
     def loss(
-        self,
-        logits,
-        _forward,
-        param,
-        param1,
-        input_ids,
-        attention_mask,
-        token_type_ids,
-        dataset_name,
+        self, logits, _forward, *wargs, **kwargs,
     ):
         pass

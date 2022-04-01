@@ -11,7 +11,7 @@ from .openbook_qa_trainer import OpenBookQATrainer
 from encoder.model.model import Model
 from encoder.dataset.base import collate_function_dict_to_batch_encoding
 from encoder.dataset.openbook_qa_fact import OpenBookQAFactDataset
-from encoder.utils.config import OpenBookQAFactTrainConfig, fix_missing
+from encoder.utils.config import OpenBookQAChainedSequenceFactTrainConfig, fix_missing
 from encoder.utils.settings import (
     proxies,
     model_cache_dir,
@@ -21,10 +21,10 @@ from encoder.utils.settings import (
 from encoder.utils.adafactor import Adafactor
 
 
-class OpenBookQAFactTrainer(pl.LightningModule):
+class OpenBookQAChainedSequenceFactTrainer(pl.LightningModule):
     def __init__(
         self,
-        config: OpenBookQAFactTrainConfig,
+        config: OpenBookQAChainedSequenceFactTrainConfig,
         stage_result_path="./",
         is_distributed=False,
     ):
