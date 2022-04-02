@@ -7,10 +7,6 @@ from .commonsense_qa_search_trainer import CommonsenseQASearchTrainer
 from .commonsense_qa_trainer import CommonsenseQATrainer
 from .openbook_qa_trainer import OpenBookQATrainer
 from .openbook_qa_fact_trainer import OpenBookQAFactTrainer
-from .openbook_qa_chained_sequence_trainer import OpenBookQAChainedSequenceTrainer
-from .openbook_qa_chained_sequence_fact_trainer import (
-    OpenBookQAChainedSequenceFactTrainer,
-)
 from .arc_trainer import ARCTrainer
 from .arc_search_trainer import ARCSearchTrainer
 from .ensemble_trainer import EnsembleTrainer
@@ -24,8 +20,6 @@ stage_name_to_trainer_map = {
     "commonsense_qa_search": CommonsenseQASearchTrainer,
     "openbook_qa": OpenBookQATrainer,
     "openbook_qa_fact": OpenBookQAFactTrainer,
-    "openbook_qa_chained_sequence": OpenBookQAChainedSequenceTrainer,
-    "openbook_qa_chained_sequence_fact": OpenBookQAChainedSequenceFactTrainer,
     "arc": ARCTrainer,
     "arc_search": ARCSearchTrainer,
     "ensemble": EnsembleTrainer,

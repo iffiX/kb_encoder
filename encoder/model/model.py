@@ -15,7 +15,7 @@ from encoder.utils.settings import (
     huggingface_mirror,
     local_files_only,
 )
-from .layers import ChoicePredictor, ChoiceClassifier, ChainedSequenceChoicePredictor
+from .layers import ChoicePredictor, ChoiceClassifier
 from .perturbation import SmartPerturbation
 from .sift import SiFTAdversarialLearner, hook_sift_layer
 from .loss import LOSS_REGISTRY, LossCriterion
@@ -45,6 +45,7 @@ class Model(nn.Module):
         adversarial_training_config: dict = None,
         choice_predictor_type: str = "predictor",
         choice_predictor_dropout_prob: float = 0.0,
+        choice_predictor_use_pooled_output: bool = False,
         choice_predictor_dataset_names: List[str] = None,
         regularize_with_bce_loss: bool = False,
         bce_loss_weight: float = 0.02,
@@ -94,6 +95,7 @@ class Model(nn.Module):
                 )
             choice_predictors.update(reranker)
         self.choice_predictor_type = choice_predictor_type
+        self.choice_predictor_use_pooled_output = choice_predictor_use_pooled_output
         self.choice_predictors = nn.ModuleDict(choice_predictors)
         self.adversarial_training = adversarial_training
         self.adversarial_training_use_sift = adversarial_training_use_sift
@@ -313,10 +315,14 @@ class Model(nn.Module):
                     model_input["token_type_ids"] = flat_token_type_ids[
                         b : b + self.batch_size
                     ]
-
-                hidden_state[b : b + self.batch_size] = self.base(
-                    **model_input
-                ).last_hidden_state[:, 0, :]
+                if not self.choice_predictor_use_pooled_output:
+                    hidden_state[b : b + self.batch_size] = self.base(
+                        **model_input
+                    ).last_hidden_state[:, 0, :]
+                else:
+                    hidden_state[b : b + self.batch_size] = self.base(
+                        **model_input
+                    ).pooler_output
 
         else:
             model_input = {
@@ -326,7 +332,10 @@ class Model(nn.Module):
             }
             if token_type_ids is not None:
                 model_input["token_type_ids"] = flat_token_type_ids
-            hidden_state = self.base(**model_input).last_hidden_state[:, 0, :]
+            if not self.choice_predictor_use_pooled_output:
+                hidden_state = self.base(**model_input).last_hidden_state[:, 0, :]
+            else:
+                hidden_state = self.base(**model_input).pooler_output
 
         dataset_name = dataset_name or "default"
 
@@ -343,7 +352,7 @@ class Model(nn.Module):
             return self.choice_predictors[dataset_name](hidden_state)
 
 
-class ModelForSequenceClassification(nn.Module):
+class ModelForRetriever(nn.Module):
     """
     BERT style classifier, with VAT (Virtual adversarial training)
 
@@ -361,7 +370,7 @@ class ModelForSequenceClassification(nn.Module):
         adversarial_training_use_sift: bool = False,
         adversarial_training_config: dict = None,
     ):
-        super(ModelForSequenceClassification, self).__init__()
+        super(ModelForRetriever, self).__init__()
 
         self.base = AutoModelForSequenceClassification.from_pretrained(
             base_type,
@@ -527,203 +536,7 @@ class ModelForSequenceClassification(nn.Module):
         return logits.view(token_type_ids.shape[0], token_type_ids.shape[1])
 
 
-class ChainedSequenceModel(nn.Module):
-    """
-    BERT style classifier, with VAT (Virtual adversarial training)
-
-    Input format is: [CLS] Question [CLS] Answer A [CLS] Answer B ... [SEP]
-    Each cls token embedding right before each answer goes through a linear layer
-    and becomes the output logits.
-
-    1. self.forward(input_ids, attention_mask, token_type_ids, label)
-    2. self.predict(input_ids, attention_mask, token_type_ids)
-    """
-
-    def __init__(
-        self,
-        base_type,
-        choice_num,
-        adversarial_training: bool = False,
-        adversarial_training_use_sift: bool = False,
-        adversarial_training_config: dict = None,
-        choice_predictor_dropout_prob: float = 0.0,
-        choice_predictor_dataset_names: List[str] = None,
-    ):
-        super(ChainedSequenceModel, self).__init__()
-
-        self.base = AutoModel.from_pretrained(
-            base_type,
-            cache_dir=model_cache_dir,
-            proxies=proxies,
-            mirror=huggingface_mirror,
-            return_dict=True,
-            local_files_only=local_files_only,
-        )
-        # self.base.max_position_embeddings = 1024
-        if choice_predictor_dataset_names is None:
-            choice_predictors = {
-                "default": ChainedSequenceChoicePredictor(
-                    self.base.config.hidden_size,
-                    choice_num,
-                    choice_predictor_dropout_prob,
-                )
-            }
-        else:
-            choice_predictors = {
-                dataset: ChainedSequenceChoicePredictor(
-                    self.base.config.hidden_size,
-                    choice_num,
-                    choice_predictor_dropout_prob,
-                )
-                for dataset in choice_predictor_dataset_names
-            }
-        self.choice_predictors = nn.ModuleDict(choice_predictors)
-        self.adversarial_training = adversarial_training
-        self.adversarial_training_use_sift = adversarial_training_use_sift
-        self.adversarial_training_config = adversarial_training_config
-        if adversarial_training:
-            if adversarial_training_use_sift:
-                adv_modules = hook_sift_layer(
-                    self,
-                    hidden_size=self.hidden_size,
-                    learning_rate=adversarial_training_config["adv_step_size"],
-                    init_perturbation=adversarial_training_config["adv_noise_var"],
-                )
-                self.adv_teacher = SiFTAdversarialLearner(self, adv_modules)
-            else:
-                # Use SMART instead
-                cs = adversarial_training_config["adv_loss"]
-                lc = LOSS_REGISTRY[LossCriterion[cs]](name=f"Adv Loss func: {cs}")
-                self.adv_task_loss_criterion = [lc]
-                self.adv_teacher = SmartPerturbation(
-                    adversarial_training_config["adv_epsilon"],
-                    adversarial_training_config["adv_step_size"],
-                    adversarial_training_config["adv_noise_var"],
-                    adversarial_training_config["adv_p_norm"],
-                    adversarial_training_config["adv_k"],
-                    loss_map=self.adv_task_loss_criterion,
-                    norm_level=adversarial_training_config["adv_norm_level"],
-                )
-
-    def embed_encode(self, input_ids, token_type_ids=None, _attention_mask=None):
-        """
-        This method is used by Smart (SmartPerturbation)
-
-        input_ids: LongTensor of shape [batch_size, choice_num, seq_length]
-        token_type_ids: LongTensor of shape [batch_size, choice_num, seq_length]
-        """
-        embedding_output = self.base.embeddings(input_ids, token_type_ids)
-        return embedding_output
-
-    def forward(
-        self,
-        input_ids,
-        attention_mask,
-        token_type_ids,
-        labels,
-        dataset_name=None,
-        choice_mask=None,
-    ):
-        """
-
-        Args:
-            input_ids: LongTensor of shape [batch_size, choice_num, seq_length]
-            attention_mask: FloatTensor of shape [batch_size, choice_num, seq_length]
-            token_type_ids: LongTensor of shape [batch_size, choice_num, seq_length]
-            labels: LongTensor of shape [batch_size,]
-            dataset_name: String indicating which dataset it is from
-            choice_mask: FloatTensor of shape [batch_size, choice_num]
-
-        Returns:
-            loss: Loss of training.
-            right_num: Integer number of right predictions
-            logits: Masked (If choice mask is present) logits, FloatTensor of shape [batch_size, choice_num]
-            adv_norm: Norm of adversarial training
-        """
-        logits = self._forward(input_ids, attention_mask, token_type_ids)
-
-        # Masking for multi-task training where choice number is different for each dataset
-        if choice_mask is not None:
-            clf_logits = choice_mask * -1e7 + logits
-        else:
-            clf_logits = logits
-
-        loss = F.cross_entropy(clf_logits, labels.view(-1), reduction="none")
-
-        if self.adversarial_training and self.training:
-            if self.adversarial_training_use_sift:
-                adv_loss, adv_norm = self.adv_teacher.loss(
-                    logits,
-                    self._forward,
-                    self.adversarial_training_config["grad_adv_loss"],
-                    self.adversarial_training_config["adv_loss"],
-                    input_ids,
-                    attention_mask,
-                    token_type_ids,
-                    dataset_name,
-                )
-                loss = loss + self.adversarial_training_config["adv_alpha"] * adv_loss
-            else:
-                adv_loss, adv_norm, adv_logits = self.adv_teacher.forward(
-                    self,
-                    logits,
-                    input_ids,
-                    attention_mask,
-                    token_type_ids,
-                    dataset_name,
-                )
-                if adv_loss is None:
-                    adv_loss = torch.zeros_like(loss)
-                    adv_norm = adv_loss
-                loss = loss + self.adversarial_training_config["adv_alpha"] * adv_loss
-        else:
-            adv_norm = None
-
-        with torch.no_grad():
-            predicts = torch.argmax(clf_logits, dim=1)
-            right_num = int(torch.sum(predicts == labels))
-
-        result = ModelOutput()
-        result.loss = loss.mean()
-        result.right_num = right_num
-        result.logits = clf_logits
-        result.adv_norm = adv_norm
-        return result
-
-    def predict(self, input_ids, attention_mask, token_type_ids, dataset_name=None):
-        """
-        Args:
-            input_ids: LongTensor of shape [batch_size, choice_num, seq_length]
-            attention_mask: FloatTensor of shape [batch_size, choice_num, seq_length]
-            token_type_ids: LongTensor of shape [batch_size, choice_num, seq_length]
-            dataset_name: String indicating which dataset it is from
-        """
-        logits = self._forward(
-            input_ids, attention_mask, token_type_ids, dataset_name=dataset_name
-        )
-        return logits.detach()
-
-    def _forward(
-        self,
-        input_ids,
-        attention_mask,
-        token_type_ids,
-        dataset_name=None,
-        inputs_embeds=None,
-    ):
-        outputs = self.base(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            inputs_embeds=inputs_embeds,
-        )
-        dataset_name = dataset_name or "default"
-        return self.choice_predictors[dataset_name](
-            outputs.last_hidden_state, input_ids
-        )
-
-
-class ModelForComparison(nn.Module):
+class ModelForReranker(nn.Module):
     def __init__(
         self,
         base_type,
@@ -732,7 +545,7 @@ class ModelForComparison(nn.Module):
         adversarial_training_use_sift: bool = False,
         adversarial_training_config: dict = None,
     ):
-        super(ModelForComparison, self).__init__()
+        super(ModelForReranker, self).__init__()
         self.base = AutoModel.from_pretrained(
             base_type,
             cache_dir=model_cache_dir,

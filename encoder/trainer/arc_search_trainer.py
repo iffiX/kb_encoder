@@ -6,7 +6,7 @@ import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 from torch.distributed import all_gather_object, get_world_size, get_rank
 from transformers import AutoTokenizer, BatchEncoding
-from encoder.model.model import ModelForSequenceClassification, ModelForComparison
+from encoder.model.model import ModelForRetriever, ModelForReranker
 from encoder.dataset.base import collate_function_dict_to_batch_encoding
 from encoder.dataset.arc_search import ARCSearchDataset
 from encoder.utils.config import ARCSearchTrainConfig, fix_missing
@@ -64,13 +64,13 @@ class ARCSearchTrainer(pl.LightningModule):
             reranker_max_seq_length=config.reranker_max_seq_length,
         )
         retriever_model_configs = config.retriever_model_configs or {}
-        self.retriever_model = ModelForComparison(
+        self.retriever_model = ModelForReranker(
             config.retriever_base_type,
             config.retriever_negative_samples + 1,
             **retriever_model_configs,
         )
         reranker_model_configs = config.reranker_model_configs or {}
-        self.reranker_model = ModelForSequenceClassification(
+        self.reranker_model = ModelForRetriever(
             config.reranker_base_type,
             config.reranker_negative_samples + 1,
             **reranker_model_configs,
