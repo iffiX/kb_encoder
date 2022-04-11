@@ -97,7 +97,7 @@ class ARCMatcher(BaseMatcher):
                         continue
                     facts.add(line.lower())
         logging.info(f"Generated {len(facts)} facts")
-        return list(facts)
+        return sorted(list(facts))
 
     def __reduce__(self):
         return ARCMatcher, (self.tokenizer,)

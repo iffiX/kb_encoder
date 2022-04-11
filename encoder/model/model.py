@@ -45,7 +45,6 @@ class Model(nn.Module):
         adversarial_training_config: dict = None,
         choice_predictor_type: str = "predictor",
         choice_predictor_dropout_prob: float = 0.0,
-        choice_predictor_use_pooled_output: bool = False,
         choice_predictor_dataset_names: List[str] = None,
         regularize_with_bce_loss: bool = False,
         bce_loss_weight: float = 0.02,
@@ -95,7 +94,6 @@ class Model(nn.Module):
                 )
             choice_predictors.update(reranker)
         self.choice_predictor_type = choice_predictor_type
-        self.choice_predictor_use_pooled_output = choice_predictor_use_pooled_output
         self.choice_predictors = nn.ModuleDict(choice_predictors)
         self.adversarial_training = adversarial_training
         self.adversarial_training_use_sift = adversarial_training_use_sift
@@ -315,14 +313,9 @@ class Model(nn.Module):
                     model_input["token_type_ids"] = flat_token_type_ids[
                         b : b + self.batch_size
                     ]
-                if not self.choice_predictor_use_pooled_output:
-                    hidden_state[b : b + self.batch_size] = self.base(
-                        **model_input
-                    ).last_hidden_state[:, 0, :]
-                else:
-                    hidden_state[b : b + self.batch_size] = self.base(
-                        **model_input
-                    ).pooler_output
+                hidden_state[b : b + self.batch_size] = self.base(
+                    **model_input
+                ).last_hidden_state[:, 0, :]
 
         else:
             model_input = {
@@ -332,10 +325,7 @@ class Model(nn.Module):
             }
             if token_type_ids is not None:
                 model_input["token_type_ids"] = flat_token_type_ids
-            if not self.choice_predictor_use_pooled_output:
-                hidden_state = self.base(**model_input).last_hidden_state[:, 0, :]
-            else:
-                hidden_state = self.base(**model_input).pooler_output
+            hidden_state = self.base(**model_input).last_hidden_state[:, 0, :]
 
         dataset_name = dataset_name or "default"
 

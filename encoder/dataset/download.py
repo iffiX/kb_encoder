@@ -182,7 +182,7 @@ class QASC:
         ):
             if not os.path.exists(data_path):
                 if not os.path.exists(str(data_path) + ".tar.gz"):
-                    logging.info(f"Downloading concept net {task}")
+                    logging.info(f"Downloading {task}")
                     download_to(url, str(data_path) + ".tar.gz")
                 logging.info("Decompressing")
                 decompress_tar_gz(str(data_path) + ".tar.gz", data_path)

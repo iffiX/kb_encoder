@@ -1,0 +1,48 @@
+{
+    "configs": [
+        {
+            "accumulate_grad_batches": 8,
+            "base_type": "t5-11b",
+            "batch_size": 2,
+            "chunk_size": 2,
+            "epochs": 20,
+            "load_worker_num": 16,
+            "load_prefetch_per_worker": 16,
+            "l2_regularization": 0,
+            "learning_rate": 1e-3,
+            "scheduler_warmup_proportion": 0,
+            "load": false,
+            "max_seq_length": 350,
+            "optimizer_class": "Adafactor",
+            "use_matcher": true,
+            "matcher_mode": "embedding",
+            "device_map":  {
+                "0": [0, 1, 2, 3, 4, 5, 6, 7],
+                "1": [8, 9, 10, 11, 12, 13, 14, 15],
+                "2": [16, 17, 18, 19, 20, 21, 22, 23]
+            },
+            "matcher_config": {
+                "question_match_max_times": 1000,
+                "question_match_max_depth": 1,
+                "question_match_edge_top_k": 10,
+                "question_match_source_context_range": 0,
+                "question_select_max_edges": 2,
+                "question_select_discard_edges_if_rank_below": 0.4,
+                "choices_match_max_times": 1000,
+                "choices_match_max_depth": 1,
+                "choices_match_edge_top_k": 10,
+                "choices_match_source_context_range": 0,
+                "choices_select_max_edges": 2,
+                "choices_select_discard_edges_if_rank_below": 0
+            },
+            "seed": 697474,
+            "save": true
+        }
+    ],
+    "early_stopping_patience": 15,
+    "gpus": [0],
+    "stages": [
+        "arc"
+    ],
+    "working_directory": "/home/muhan/data/workspace/kb_encoder/train_arc_t5"
+}

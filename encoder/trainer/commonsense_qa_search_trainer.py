@@ -42,7 +42,7 @@ class CommonsenseQASearchTrainer(pl.LightningModule):
         self.is_distributed = is_distributed
 
         self.tokenizer = AutoTokenizer.from_pretrained(
-            "t5-base" if config.base_type.startswith("t5") else config.base_type,
+            "t5-base" if "t5-" in config.base_type else config.base_type,
             cache_dir=model_cache_dir,
             proxies=proxies,
             mirror=huggingface_mirror,
@@ -59,9 +59,9 @@ class CommonsenseQASearchTrainer(pl.LightningModule):
             include_option_label_in_answer_and_choices=config.include_option_label_in_answer_and_choices,
             use_option_label_as_answer_and_choices=config.use_option_label_as_answer_and_choices,
             match_closest_when_no_equal=config.match_closest_when_no_equal,
-            output_mode="single" if config.base_type.startswith("t5") else "splitted",
+            output_mode="single" if "t5-" in config.base_type else "splitted",
         )
-        if config.base_type.startswith("t5"):
+        if "t5-" in config.base_type:
             self.model = T5ForConditionalGeneration.from_pretrained(
                 config.base_type,
                 cache_dir=model_cache_dir,
@@ -117,10 +117,7 @@ class CommonsenseQASearchTrainer(pl.LightningModule):
         ]
 
     def on_fit_start(self):
-        if (
-            self.config.base_type.startswith("t5")
-            and self.config.device_map is not None
-        ):
+        if "t5-" in self.config.base_type and self.config.device_map is not None:
             if self.is_distributed:
                 raise ValueError(
                     "Parallelize T5 model is incompatible with distributed training."
@@ -136,7 +133,7 @@ class CommonsenseQASearchTrainer(pl.LightningModule):
 
     # noinspection PyTypeChecker
     def training_step(self, batch: BatchEncoding, batch_idx):
-        if self.config.base_type.startswith("t5"):
+        if "t5-" in self.config.base_type:
             # answer shape [batch_size, sequence_length]
             out = self.model(
                 input_ids=batch["sentence"].to(self.real_device),
@@ -154,7 +151,7 @@ class CommonsenseQASearchTrainer(pl.LightningModule):
 
     # noinspection PyTypeChecker
     def validation_step(self, batch: BatchEncoding, _batch_idx, _dataloader_idx):
-        if self.config.base_type.startswith("t5"):
+        if "t5-" in self.config.base_type:
             out = self.model.generate(
                 batch["sentence"].to(self.real_device),
                 max_length=self.config.generate_length,
@@ -195,7 +192,7 @@ class CommonsenseQASearchTrainer(pl.LightningModule):
             batch, result = collate_and_filter_outputs(outputs[dataloader_idx])
             self.save_targets(prefix, batch, result)
             if dataloader_idx == 0:
-                if self.config.base_type.startswith("t5"):
+                if "t5-" in self.config.base_type:
                     metrics = self.dataset.validate_tokens(batch, result)
                 else:
                     metrics = self.dataset.validate_logits(batch, result)

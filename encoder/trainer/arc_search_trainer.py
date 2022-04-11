@@ -3,6 +3,7 @@ import itertools
 import warnings
 import torch as t
 import pytorch_lightning as pl
+from typing import Dict, Any
 from torch.utils.data import DataLoader
 from torch.distributed import all_gather_object, get_world_size, get_rank
 from transformers import AutoTokenizer, BatchEncoding
@@ -113,7 +114,7 @@ class ARCSearchTrainer(pl.LightningModule):
                 num_workers=self.config.load_worker_num,
                 prefetch_factor=self.config.load_prefetch_per_worker,
                 batch_size=self.config.reranker_batch_size,
-                collate_fn=collate_function_dict_to_batch_encoding,
+                collate_fn=lambda x: x,
                 worker_init_fn=set_worker_sharing_strategy,
             )
 
@@ -189,17 +190,19 @@ class ARCSearchTrainer(pl.LightningModule):
                 retriever_opt.step()
                 retriever_opt.zero_grad()
         else:
-            reranker_out = self.reranker_model(
-                input_ids=batch["sentence"].to(self.device),
-                attention_mask=batch["mask"].to(self.device),
-                token_type_ids=batch["type_ids"].to(self.device),
-                labels=batch["answer"].to(self.device),
-            )
-            self.log(
-                "reranker_loss", reranker_out.loss.item(), prog_bar=True, on_step=True
-            )
+            loss = 0
+            for data in batch:
+                reranker_out = self.reranker_model(
+                    input_ids=data["sentence"].to(self.device),
+                    attention_mask=data["mask"].to(self.device),
+                    token_type_ids=data["type_ids"].to(self.device),
+                    labels=t.LongTensor([data["answer"]]).to(self.device),
+                )
+                loss = loss + reranker_out.loss
+            loss = loss / len(batch)
+            self.log("reranker_loss", loss.item(), prog_bar=True, on_step=True)
 
-            self.manual_backward(reranker_out.loss)
+            self.manual_backward(loss)
             reranker_sch.step()
             if (batch_idx + 1) % self.config.reranker_accumulate_grad_batches == 0:
                 reranker_opt.step()
@@ -207,17 +210,18 @@ class ARCSearchTrainer(pl.LightningModule):
 
     # noinspection PyTypeChecker
     def validation_step(self, batch: BatchEncoding, batch_idx, dataloader_idx):
-        if self.should_train_retriever():
-            embeds = self.retriever_model.predict_embedding(
-                input_ids=batch["sentence"].to(self.device),
-                attention_mask=batch["mask"].to(self.device),
-                token_type_ids=batch["type_ids"].to(self.device)
-                if "type_ids" in batch
-                else None,
-            )
-            return {"batch": batch, "result": embeds}
-        else:
-            return None
+        if self.trainer.stage_mode == "train":
+            if self.should_train_retriever():
+                embeds = self.retriever_model.predict_embedding(
+                    input_ids=batch["sentence"].to(self.device),
+                    attention_mask=batch["mask"].to(self.device),
+                    token_type_ids=batch["type_ids"].to(self.device)
+                    if "type_ids" in batch
+                    else None,
+                )
+                return {"batch": batch, "result": embeds}
+            else:
+                return None
 
     def validation_epoch_end(self, outputs):
         if self.is_distributed:
@@ -230,7 +234,7 @@ class ARCSearchTrainer(pl.LightningModule):
             self.validate_on_every_process(outputs)
 
     def validate_on_every_process(self, outputs):
-        if self.should_train_retriever() or self.trainer.validating:
+        if self.trainer.stage_mode == "train" and self.should_train_retriever():
             fact_batch, fact_embeds = collate_and_filter_outputs(outputs[0])
             k_num = min(self.config.retriever_top_k, fact_embeds.shape[0])
             validate_batch, validate_embeds = collate_and_filter_outputs(outputs[1])
@@ -298,12 +302,12 @@ class ARCSearchTrainer(pl.LightningModule):
                 ).indices
                 self.retriever_best_top_k = [
                     validate_batch,
-                    validate_top_k,
+                    validate_top_k.cpu(),
                     annotate_batch,
-                    annotate_top_k,
-                    search_top_k,
+                    annotate_top_k.cpu(),
+                    search_top_k.cpu(),
                 ]
-        if not self.should_train_retriever() or self.trainer.validating:
+        if self.trainer.stage_mode == "train" and not self.should_train_retriever():
             print("\nGenerating data for validate top-k")
             validate_input = self.move_reranker_input(
                 self.dataset.generate_reranker_input(
@@ -362,48 +366,46 @@ class ARCSearchTrainer(pl.LightningModule):
 
                     self.reranker_current_search_best_accuracy = metrics["accuracy"]
                     self.reranker_best_choice = [
-                        annotate_choice,
-                        annotate_confidence,
-                        search_candidates,
+                        annotate_choice.cpu(),
+                        annotate_confidence.cpu(),
+                        search_candidates.cpu(),
                     ]
 
         if (
-            self.should_annotate_and_save_search()
-            or self.trainer.validating
-            and len(self.reranker_best_choice) > 0
-        ):
+            self.reranker_current_search_best_accuracy
+            > self.reranker_saved_search_best_accuracy
+            or self.trainer.stage_mode == "validate"
+        ) and (not self.is_distributed or get_rank() == 0):
             print(
-                f"\nAnnotating train data and saving train targets, "
+                f"\nSaving train targets, "
                 f"best accuracy: {self.reranker_best_accuracy}"
             )
-            self.dataset.annotate_train_data(
-                self.retriever_best_top_k[2],
-                self.relative_top_k_to_absolute_fact_index(
-                    self.retriever_best_top_k[3], self.reranker_best_choice[0]
-                ),
-                self.reranker_best_choice[1],
-            )
-            if (
+            self.reranker_saved_search_best_accuracy = (
                 self.reranker_current_search_best_accuracy
-                > self.reranker_saved_search_best_accuracy
-                and (not self.is_distributed or get_rank() == 0)
-            ):
-                self.reranker_saved_search_best_accuracy = (
-                    self.reranker_current_search_best_accuracy
+            )
+            try:
+                self.dataset.save_search_targets(
+                    self.relative_top_k_to_absolute_fact_index(
+                        self.retriever_best_top_k[4], self.reranker_best_choice[2],
+                    )
                 )
-                try:
-                    self.dataset.save_search_targets(
-                        self.relative_top_k_to_absolute_fact_index(
-                            self.retriever_best_top_k[4], self.reranker_best_choice[2],
-                        )
-                    )
-                except ValueError:
-                    print(
-                        "\nSearch targets not saved, ignore this during sanity checking"
-                    )
-            self.reranker_best_choice = []
+            except ValueError:
+                print("\nSearch targets not saved, ignore this during sanity checking")
 
-        if self.should_annotate_and_save_search():
+        if self.is_end_of_self_train_epoch():
+            if len(self.reranker_best_choice) > 0:
+                print(
+                    f"\nAnnotating train data, "
+                    f"best accuracy: {self.reranker_best_accuracy}"
+                )
+                self.dataset.annotate_train_data(
+                    self.retriever_best_top_k[2],
+                    self.relative_top_k_to_absolute_fact_index(
+                        self.retriever_best_top_k[3], self.reranker_best_choice[0]
+                    ),
+                    self.reranker_best_choice[1],
+                )
+
             self.retriever_best_accuracy = 0
             self.retriever_best_top_k = []
             self.reranker_best_accuracy = 0
@@ -474,6 +476,30 @@ class ARCSearchTrainer(pl.LightningModule):
             self.retriever_model.load_state_dict(self.retriever_original_state_dict)
             self.reranker_model.load_state_dict(self.reranker_original_state_dict)
 
+    def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        checkpoint["retriever_best_accuracy"] = self.retriever_best_accuracy
+        checkpoint["retriever_best_top_k"] = self.retriever_best_top_k
+        checkpoint["reranker_best_accuracy"] = self.reranker_best_accuracy
+        checkpoint[
+            "reranker_current_search_best_accuracy"
+        ] = self.reranker_current_search_best_accuracy
+        checkpoint[
+            "reranker_saved_search_best_accuracy"
+        ] = self.reranker_saved_search_best_accuracy
+        checkpoint["reranker_best_choice"] = self.reranker_best_choice
+
+    def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        self.retriever_best_accuracy = checkpoint["retriever_best_accuracy"]
+        self.retriever_best_top_k = checkpoint["retriever_best_top_k"]
+        self.reranker_best_accuracy = checkpoint["reranker_best_accuracy"]
+        self.reranker_current_search_best_accuracy = checkpoint[
+            "reranker_current_search_best_accuracy"
+        ]
+        self.reranker_saved_search_best_accuracy = checkpoint[
+            "reranker_saved_search_best_accuracy"
+        ]
+        self.reranker_best_choice = checkpoint["reranker_best_choice"]
+
     def should_train_retriever(self):
         self_learn_epochs = (
             self.config.epochs_per_retriever_self_learn
@@ -484,7 +510,7 @@ class ARCSearchTrainer(pl.LightningModule):
             < self.config.epochs_per_retriever_self_learn
         )
 
-    def should_annotate_and_save_search(self):
+    def is_end_of_self_train_epoch(self):
         return (self.current_epoch + 1) % (
             self.config.epochs_per_retriever_self_learn
             + self.config.epochs_per_reranker_self_learn

@@ -13,7 +13,7 @@ from .ensemble_trainer import EnsembleTrainer
 from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import TensorBoardLogger
-from pytorch_lightning.plugins import DDPPlugin
+from pytorch_lightning.plugins import DDPPlugin, DeepSpeedPlugin
 
 stage_name_to_trainer_map = {
     "commonsense_qa": CommonsenseQATrainer,
@@ -132,12 +132,24 @@ def _train(
     else:
         logging.info("Not loading, using original weights.")
 
+    plugins = []
+
+    if config.deepspeed:
+        deepspeed_configs = config.deepspeed_configs or {
+            "cpu_offload": True,
+            "allgather_bucket_size": 2e8,
+            "reduce_bucket_size": 2e8,
+        }
+        plugins.append(DeepSpeedPlugin(**deepspeed_configs))
+    elif is_distributed:
+        plugins.append(DDPPlugin(find_unused_parameters=True))
+
     trainer = pl.Trainer(
-        gpus=str(config.gpus[0])
-        if isinstance(config.gpus, list) and len(config.gpus) == 1
-        else config.gpus,
-        accelerator="ddp" if is_distributed else None,
-        plugins=[DDPPlugin(find_unused_parameters=True)] if is_distributed else None,
+        accelerator="gpu"
+        if not (isinstance(config.gpus, int) and config.gpus == 0)
+        else None,
+        gpus=config.gpus,
+        plugins=plugins if len(plugins) > 0 else None,
         callbacks=[checkpoint_callback, early_stopping],
         logger=[t_logger],
         reload_dataloaders_every_epoch=True
@@ -153,8 +165,9 @@ def _train(
         accumulate_grad_batches=getattr(stage_config, "accumulate_grad_batches", 1),
         resume_from_checkpoint=checkpoint,
         deterministic=True,
+        precision=config.precision,
     )
-
+    trainer.stage_mode = "train"
     trainer.fit(stage_trainer)
 
 
@@ -209,15 +222,17 @@ def run(config: Config, stage_index: int, mode: str = "train"):
         stage_trainer = stage_name_to_checkpoint(stage, checkpoint)
 
         trainer = pl.Trainer(
-            gpus=str(config.gpus[0])
-            if isinstance(config.gpus, list) and len(config.gpus) == 1
-            else config.gpus,
-            accelerator="ddp" if is_distributed else None,
+            accelerator="gpu"
+            if not (isinstance(config.gpus, int) and config.gpus == 0)
+            else None,
+            gpus=config.gpus,
+            strategy="ddp" if is_distributed else None,
             plugins=[DDPPlugin(find_unused_parameters=True)]
             if is_distributed
             else None,
             deterministic=True,
         )
+        trainer.stage_mode = mode
         if mode == "validate":
             trainer.validate(stage_trainer)
         else:

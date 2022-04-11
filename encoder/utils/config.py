@@ -163,8 +163,8 @@ class ARCTrainConfig(BaseModel):
     base_type: str = "microsoft/deberta-v3-large"
     model_configs: Optional[dict] = None
     max_seq_length: int = 128
-    generate_length: int = 20
     device_map: Optional[Dict[int, List[int]]] = None
+    pipe_chunks: Optional[int] = 8
     load_worker_num: Optional[int] = 0
     load_prefetch_per_worker: Optional[int] = 2
 
@@ -229,7 +229,9 @@ class EnsembleTrainConfig(BaseModel):
 class Config(BaseModel):
     # Cuda ids of GPUs
     gpus: Optional[Union[int, List[int]]] = [0]
-
+    precision: Optional[Union[int, str]] = 32
+    deepspeed: bool = False
+    deepspeed_configs: Optional[dict] = None
     # Maximum validation epochs allowed before stopping
     # when monitored metric is not decreasing
     early_stopping_patience: int = 100
@@ -276,6 +278,9 @@ def load_config(path: str) -> Config:
         config_dict = json.load(f)
         config = Config(
             gpus=config_dict.get("gpus", 0),
+            precision=config_dict.get("precision", 32),
+            deepspeed=config_dict.get("deepspeed", False),
+            deepspeed_configs=config_dict.get("deepspeed_configs", None),
             early_stopping_patience=config_dict.get("early_stopping_patience", 100),
             working_directory=config_dict["working_directory"],
         )

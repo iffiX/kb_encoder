@@ -44,6 +44,7 @@ class ARCSearchDataset:
         retriever_max_seq_length: int = 100,
         reranker_negative_samples: int = 4,
         reranker_max_seq_length: int = 100,
+        seed: int = 42,
     ):
         self.retriever_tokenizer = retriever_tokenizer
         self.reranker_tokenizer = reranker_tokenizer
@@ -67,23 +68,27 @@ class ARCSearchDataset:
         if not os.path.exists(archive_path):
             self.facts = self.generate_facts()
             (
-                self.train_data,
+                self.train_retriever_data,
                 self.unannotated_train_data,
                 self.search_data,
-            ) = self.generate_train_data()
+            ) = self.generate_retriever_train_data()
+            self.train_reranker_data = self.generate_reranker_train_data()
             self.validate_data = self.generate_validate_data()
             self.save(archive_path)
         else:
             with open_file_with_create_directories(archive_path, "rb") as file:
                 data = pickle.load(file)
                 self.facts = data["facts"]
-                self.train_data = data["train"]
+                self.train_retriever_data = data["train_retriever"]
+                self.train_reranker_data = data["train_reranker"]
                 self.unannotated_train_data = data["unannotated_train"]
                 self.search_data = data["search"]
                 self.validate_data = data["validate"]
+
+        self.random = random.Random(seed)
         self.negative_fact_gen = {
             fact: NegativeFactSampler(
-                len(self.facts), self.facts.index(fact), seed=42 + idx
+                len(self.facts), self.facts.index(fact), seed=seed + idx
             )
             for idx, fact in enumerate(self.facts)
         }
@@ -120,18 +125,22 @@ class ARCSearchDataset:
     @property
     def train_retriever_dataset(self):
         return StaticIterableDataset(
-            len(self.train_data), self.retriever_generator, ("train",),
+            len(self.train_retriever_data), self.retriever_generator, ("train",),
         )
 
     @property
     def train_retriever_candidates_dataset(self):
         return StaticIterableDataset(
-            len(self.train_data), self.retriever_generator, ("train_candidates",),
+            len(self.train_retriever_data),
+            self.retriever_generator,
+            ("train_candidates",),
         )
 
     @property
     def train_reranker_dataset(self):
-        return StaticIterableDataset(len(self.train_data), self.reranker_generator)
+        return StaticIterableDataset(
+            len(self.train_reranker_data), self.reranker_generator
+        )
 
     @property
     def unannotated_train_dataset(self):
@@ -164,7 +173,7 @@ class ARCSearchDataset:
                 data["type_ids"] = self.retriever_all_fact_type_ids[index].unsqueeze(1)
             return data
         if split == "train" or split == "train_candidates":
-            data = self.train_data[index]
+            data = self.train_retriever_data[index]
         elif split == "unannotated_train":
             data = self.unannotated_train_data[index]
         elif split == "validate":
@@ -179,10 +188,10 @@ class ARCSearchDataset:
         sentences, masks, type_ids = [], [], []
         correct_choice = -1
         if split == "train":
-            correct_choice = random.randint(0, self.retriever_negative_samples)
+            correct_choice = self.random.randint(0, self.retriever_negative_samples)
             exclude_indexes = None
-            # if len(data["facts"]) > 1:
-            #     exclude_indexes = [self.facts.index(f) for f in data["facts"][1:]]
+            if len(data["facts"]) > 1:
+                exclude_indexes = [self.facts.index(f) for f in data["facts"][1:]]
 
             encoded_sentence = self.retriever_tokenizer(
                 data["question"],
@@ -232,40 +241,55 @@ class ARCSearchDataset:
         return data
 
     def reranker_generator(self, index: int):
-        data = copy.deepcopy(self.train_data[index])
+        data = copy.deepcopy(self.train_reranker_data[index])
 
         sentences, masks, type_ids = [], [], []
-        correct_choice = random.randint(0, self.reranker_negative_samples)
-        use_candidates = random.random() > 0.5
-        exclude_indexes = None
-        # if len(data["facts"]) > 1:
-        #     exclude_indexes = [self.facts.index(f) for f in data["facts"][1:]]
+        if data["id"].startswith("arc"):
+            # Use choices as potential "facts"
+            correct_choice = data["choices"].index(data["facts"][0])
+            for choice in data["choices"]:
+                encoded_sentence = self.reranker_tokenizer(
+                    data["question"],
+                    choice,
+                    padding="max_length",
+                    max_length=self.reranker_max_seq_length,
+                    truncation=True,
+                    return_tensors="pt",
+                )
+                sentences.append(encoded_sentence.input_ids)
+                masks.append(encoded_sentence.attention_mask)
+                type_ids.append(encoded_sentence.token_type_ids)
+        else:
+            correct_choice = self.random.randint(0, self.reranker_negative_samples)
+            use_candidates = self.random.random() > 0.5
+            exclude_indexes = None
+            if len(data["facts"]) > 1:
+                exclude_indexes = [self.facts.index(f) for f in data["facts"][1:]]
 
-        negative_count = 0
-        for i in range(self.reranker_negative_samples + 1):
-            if i == correct_choice:
-                fact_idx = self.facts.index(data["facts"][0])
-            elif use_candidates and negative_count < len(
-                data["candidate_fact_indices"]
-            ):
-                fact_idx = data["candidate_fact_indices"][negative_count]
-                negative_count += 1
-            else:
-                fact_idx = self.negative_fact_gen[data["facts"][0]](exclude_indexes)
-                negative_count += 1
+            negative_count = 0
+            for i in range(self.reranker_negative_samples + 1):
+                if i == correct_choice:
+                    fact_idx = self.facts.index(data["facts"][0])
+                elif use_candidates and negative_count < len(
+                    data["candidate_fact_indices"]
+                ):
+                    fact_idx = data["candidate_fact_indices"][negative_count]
+                    negative_count += 1
+                else:
+                    fact_idx = self.negative_fact_gen[data["facts"][0]](exclude_indexes)
+                    negative_count += 1
 
-            encoded_sentence = self.reranker_tokenizer(
-                data["question"]
-                + f" {self.reranker_tokenizer.sep_token} {','.join(data['choices'])}",
-                self.facts[fact_idx],
-                padding="max_length",
-                max_length=self.reranker_max_seq_length,
-                truncation=True,
-                return_tensors="pt",
-            )
-            sentences.append(encoded_sentence.input_ids)
-            masks.append(encoded_sentence.attention_mask)
-            type_ids.append(encoded_sentence.token_type_ids)
+                encoded_sentence = self.reranker_tokenizer(
+                    data["question"] + f" {','.join(data['choices'])}",
+                    self.facts[fact_idx],
+                    padding="max_length",
+                    max_length=self.reranker_max_seq_length,
+                    truncation=True,
+                    return_tensors="pt",
+                )
+                sentences.append(encoded_sentence.input_ids)
+                masks.append(encoded_sentence.attention_mask)
+                type_ids.append(encoded_sentence.token_type_ids)
 
         data["sentence"] = t.stack(sentences, dim=1)
         data["mask"] = t.stack(masks, dim=1)
@@ -291,8 +315,7 @@ class ARCSearchDataset:
             sub_sentences, sub_masks, sub_type_ids = [], [], []
             for fact_idx in top_k_facts:
                 encoded_sentence = self.reranker_tokenizer(
-                    data["question"]
-                    + f" {self.reranker_tokenizer.sep_token} {','.join(data['choices'])}",
+                    data["question"] + f" {','.join(data['choices'])}",
                     self.facts[fact_idx],
                     padding="max_length",
                     max_length=self.reranker_max_seq_length,
@@ -339,11 +362,11 @@ class ARCSearchDataset:
                     )
         return {"accuracy": total_correct / total}
 
-    def generate_train_data(self):
+    def generate_retriever_train_data(self):
         data = []
         unannotated_data = []
         search_data = []
-        logging.info("Generating train data")
+        logging.info("Generating retriever train data")
         with open(self.openbook_qa.train_path, "r") as file:
             for idx, line in enumerate(file):
                 entry = json.loads(line)
@@ -372,9 +395,9 @@ class ARCSearchDataset:
         for name, path in (
             ("arc_train_challenge", self.arc.train_challenge_path),
             ("arc_validate_challenge", self.arc.validate_challenge_path),
-            ("arc_test_challenge", self.arc.test_challenge_path),
             ("arc_train_easy", self.arc.train_easy_path),
             ("arc_validate_easy", self.arc.validate_easy_path),
+            ("arc_test_challenge", self.arc.test_challenge_path),
             ("arc_test_easy", self.arc.test_easy_path),
             ("qasc_test", self.qasc.test_path),
         ):
@@ -388,10 +411,62 @@ class ARCSearchDataset:
                         "candidate_fact_indices": [],
                         "id": f"{name}_{idx}",
                     }
-                    unannotated_data.append(preprocessed)
+                    if "train" not in name and "validate" not in name:
+                        unannotated_data.append(preprocessed)
                     if "arc" in name:
                         search_data.append(preprocessed)
         return data, unannotated_data, search_data
+
+    def generate_reranker_train_data(self):
+        data = []
+        logging.info("Generating reranker train data")
+        with open(self.openbook_qa.train_path, "r") as file:
+            for idx, line in enumerate(file):
+                entry = json.loads(line)
+                fact = entry["fact1"].strip(".").lower()
+                preprocessed = {
+                    "question": entry["question"]["stem"],
+                    "choices": [c["text"] for c in entry["question"]["choices"]],
+                    "facts": [fact],
+                    "candidate_fact_indices": [],
+                    "id": f"openbook_qa_train_{idx}",
+                }
+                data.append(preprocessed)
+        with open(self.qasc.train_path, "r") as file:
+            for idx, line in enumerate(file):
+                entry = json.loads(line)
+                fact1 = entry["fact1"].strip(".").lower()
+                fact2 = entry["fact2"].strip(".").lower()
+                preprocessed = {
+                    "question": entry["question"]["stem"],
+                    "choices": [c["text"] for c in entry["question"]["choices"]],
+                    "facts": [fact1, fact2],
+                    "candidate_fact_indices": [],
+                    "id": f"qasc_train_{idx}",
+                }
+                data.append(preprocessed)
+        # for name, path in (
+        #     ("arc_train_challenge", self.arc.train_challenge_path),
+        #     ("arc_validate_challenge", self.arc.validate_challenge_path),
+        #     ("arc_train_easy", self.arc.train_easy_path),
+        #     ("arc_validate_easy", self.arc.validate_easy_path),
+        # ):
+        #     with open(path, "r") as file:
+        #         for idx, line in enumerate(file):
+        #             entry = json.loads(line)
+        #             preprocessed = {
+        #                 "question": entry["question"]["stem"],
+        #                 "choices": [c["text"] for c in entry["question"]["choices"]],
+        #                 "facts": [
+        #                     c["text"]
+        #                     for c in entry["question"]["choices"]
+        #                     if c["label"] == entry["answerKey"]
+        #                 ],
+        #                 "candidate_fact_indices": [],
+        #                 "id": f"{name}_{idx}",
+        #             }
+        #             data.append(preprocessed)
+        return data
 
     def generate_validate_data(self):
         data = []
@@ -436,10 +511,10 @@ class ARCSearchDataset:
                 for line in file:
                     entry = json.loads(line)
                     facts.add(entry["fact1"].strip(".").lower())
-                    # facts.add(entry["fact2"].strip(".").lower())
+                    facts.add(entry["fact2"].strip(".").lower())
         for path in (
             self.openbook_qa.facts_path,
-            # self.openbook_qa.crowd_source_facts_path,
+            self.openbook_qa.crowd_source_facts_path,
         ):
             with open(path, "r") as file:
                 for line in file:
@@ -455,7 +530,8 @@ class ARCSearchDataset:
             pickle.dump(
                 {
                     "facts": self.facts,
-                    "train": self.train_data,
+                    "train_retriever": self.train_retriever_data,
+                    "train_reranker": self.train_reranker_data,
                     "unannotated_train": self.unannotated_train_data,
                     "search": self.search_data,
                     "validate": self.validate_data,
@@ -475,21 +551,26 @@ class ARCSearchDataset:
                     if d["id"] == batch["id"][i]
                 ][0]
                 annotated_data["facts"] = [fact]
-                self.train_data.append(self.unannotated_train_data.pop(idx))
+                new_data = self.unannotated_train_data.pop(idx)
+                self.train_retriever_data.append(new_data)
+                self.train_reranker_data.append(new_data)
         logging.info(f"Annotated {confidence.to(dtype=t.int32).sum()} train_data")
 
     def set_train_candidate_fact_indices(
         self, batch: BatchEncoding, candidates: t.Tensor
     ):
-        if candidates.shape[0] != len(self.train_data):
+        # Note, use the length of the retriever dataset here since reranker dataset
+        # contains pseudo data without a real fact
+        if candidates.shape[0] != len(self.train_retriever_data):
             raise ValueError(
                 f"Candidate size {candidates.shape[0]} does not match "
-                f"train dataset size {len(self.train_data)}"
+                f"train dataset size {len(self.train_retriever_data)}"
             )
+        # The actual annotated data comes from the reranker dataset
         for i in range(candidates.shape[0]):
-            annotated_data = [d for d in self.train_data if d["id"] == batch["id"][i]][
-                0
-            ]
+            annotated_data = [
+                d for d in self.train_reranker_data if d["id"] == batch["id"][i]
+            ][0]
             annotated_data["candidate_fact_indices"] = candidates[i].cpu().tolist()
 
     def save_search_targets(self, choice: t.Tensor):

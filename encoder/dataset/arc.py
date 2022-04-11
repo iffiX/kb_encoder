@@ -31,6 +31,7 @@ class ARCDataset:
         matcher_mode: str = "embedding",
         matcher_seed: int = -1,
         matcher_config: dict = None,
+        output_mode: str = "single",
     ):
         self.tokenizer = tokenizer
         # Word piece is stabler for matching purpose
@@ -46,6 +47,7 @@ class ARCDataset:
         self.matcher_mode = matcher_mode
         self.matcher_seed = matcher_seed
         self.matcher_config = matcher_config
+        self.output_mode = output_mode
 
         self.matcher = ARCMatcher(tokenizer=self.matcher_tokenizer)
         self.arc = ARC().require()
@@ -75,7 +77,6 @@ class ARCDataset:
                 self.train_data = data["train"]
                 self.validate_data = data["validate"]
                 self.test_data = data["test"]
-
         self.set_corpus()
 
     @property
@@ -99,110 +100,225 @@ class ARCDataset:
             data = self.validate_data[index]
         else:
             data = self.test_data[index]
+        if self.output_mode == "single":
+            if self.use_matcher:
+                # prevent any modification to data, also prevent checkpoint storing
+                # data to gpu by moving
+                data = copy.deepcopy(data)
+                if self.matcher_mode == "embedding":
+                    target = " @ ".join(sorted(list(set(data["target"]))))
+                    target_mask = []
+                    for c in target:
+                        if c == "@":
+                            target_mask.append("-")
+                        else:
+                            target_mask.append("+")
+                    target_mask = "".join(target_mask)
 
-        if self.use_matcher:
-            # prevent any modification to data, also prevent checkpoint storing
-            # data to gpu by moving
-            data = copy.deepcopy(data)
-            if self.matcher_mode == "embedding":
-                target = " @ ".join(sorted(list(set(data["target"]))))
-                target_mask = []
-                for c in target:
-                    if c == "@":
-                        target_mask.append("-")
-                    else:
-                        target_mask.append("+")
-                target_mask = "".join(target_mask)
-
-                match = self.matcher.match_by_node_embedding(
-                    data["text_question"],
-                    target_sentence=target,
-                    target_mask=target_mask,
-                    seed=self.matcher_seed,
-                    max_times=self.matcher_config["question_match_max_times"],
-                    max_depth=self.matcher_config["question_match_max_depth"],
-                    edge_top_k=self.matcher_config["question_match_edge_top_k"],
-                    source_context_range=self.matcher_config[
-                        "question_match_source_context_range"
-                    ],
-                )
-                selection = self.matcher.select_paths(
-                    match,
-                    max_edges=self.matcher_config["question_select_max_edges"],
-                    discard_edges_if_rank_below=self.matcher_config[
-                        "question_select_discard_edges_if_rank_below"
-                    ],
-                )
-                new_question = self.matcher.insert_selection_at_end_preserve_case(
-                    data["text_question"], selection
-                )
-
-                new_choices = []
-                for choice in data["choices"]:
                     match = self.matcher.match_by_node_embedding(
-                        choice,
+                        data["text_question"],
                         target_sentence=target,
                         target_mask=target_mask,
                         seed=self.matcher_seed,
-                        max_times=self.matcher_config["choices_match_max_times"],
-                        max_depth=self.matcher_config["choices_match_max_depth"],
-                        edge_top_k=self.matcher_config["choices_match_edge_top_k"],
+                        max_times=self.matcher_config["question_match_max_times"],
+                        max_depth=self.matcher_config["question_match_max_depth"],
+                        edge_top_k=self.matcher_config["question_match_edge_top_k"],
                         source_context_range=self.matcher_config[
-                            "choices_match_source_context_range"
+                            "question_match_source_context_range"
                         ],
                     )
                     selection = self.matcher.select_paths(
                         match,
-                        max_edges=self.matcher_config["choices_select_max_edges"],
+                        max_edges=self.matcher_config["question_select_max_edges"],
                         discard_edges_if_rank_below=self.matcher_config[
-                            "choices_select_discard_edges_if_rank_below"
+                            "question_select_discard_edges_if_rank_below"
                         ],
                     )
 
-                    new_choices.append(
-                        self.matcher.insert_selection_at_end_preserve_case(
-                            choice, selection,
-                        )
+                    new_question = self.matcher.insert_selection(
+                        data["text_question"], selection, insert_at_end=True,
                     )
-            elif self.matcher_mode == "none":
-                new_question = data["text_question"]
-                new_choices = data["choices"]
-            else:
-                raise ValueError(f"Invalid match mode {self.matcher_mode}")
 
-            sentences, masks, type_ids = [], [], []
-            for choice in new_choices:
+                    new_choices = []
+                    for label, choice in zip(self.generate_labels(), data["choices"]):
+                        if len(choice) > 0:
+                            match = self.matcher.match_by_node_embedding(
+                                f"{label} {choice}",
+                                target_sentence=target,
+                                target_mask=target_mask,
+                                source_mask="----" + "+" * len(choice),
+                                seed=self.matcher_seed,
+                                max_times=self.matcher_config[
+                                    "choices_match_max_times"
+                                ],
+                                max_depth=self.matcher_config[
+                                    "choices_match_max_depth"
+                                ],
+                                edge_top_k=self.matcher_config[
+                                    "choices_match_edge_top_k"
+                                ],
+                                source_context_range=self.matcher_config[
+                                    "choices_match_source_context_range"
+                                ],
+                            )
+                            selection = self.matcher.select_paths(
+                                match,
+                                max_edges=self.matcher_config[
+                                    "choices_select_max_edges"
+                                ],
+                                discard_edges_if_rank_below=self.matcher_config[
+                                    "choices_select_discard_edges_if_rank_below"
+                                ],
+                            )
+
+                            new_choices.append(
+                                self.matcher.insert_selection_at_end_preserve_case(
+                                    f"{label} {choice}", selection,
+                                )
+                            )
+                    new_choices = " ".join(new_choices)
+                elif self.matcher_mode == "none":
+                    new_question = data["text_question"]
+                    new_choices = data["text_choices"]
+                else:
+                    raise ValueError(f"Invalid match mode {self.matcher_mode}")
+
                 encoded_sentence = self.tokenizer(
                     new_question,
-                    choice,
+                    new_choices,
                     padding="max_length",
                     max_length=self.max_seq_length,
                     truncation=True,
                     return_tensors="pt",
                 )
-                sentences.append(encoded_sentence.input_ids)
-                masks.append(encoded_sentence.attention_mask)
-                type_ids.append(encoded_sentence.token_type_ids)
-            data["sentence"] = t.stack(sentences, dim=1)
-            data["mask"] = t.stack(masks, dim=1)
-            data["type_ids"] = t.stack(type_ids, dim=1)
-        else:
-            sentences, masks, type_ids = [], [], []
-            for choice in data["choices"]:
+                data["sentence"] = encoded_sentence.input_ids
+                data["mask"] = encoded_sentence.attention_mask
+            else:
                 encoded_sentence = self.tokenizer(
                     data["text_question"],
-                    choice,
+                    data["text_choices"],
                     padding="max_length",
                     max_length=self.max_seq_length,
                     truncation=True,
                     return_tensors="pt",
                 )
-                sentences.append(encoded_sentence.input_ids)
-                masks.append(encoded_sentence.attention_mask)
-                type_ids.append(encoded_sentence.token_type_ids)
-            data["sentence"] = t.stack(sentences, dim=1)
-            data["mask"] = t.stack(masks, dim=1)
-            data["type_ids"] = t.stack(type_ids, dim=1)
+                data["sentence"] = encoded_sentence.input_ids
+                data["mask"] = encoded_sentence.attention_mask
+            answer = self.tokenizer.encode(
+                self.generate_labels()[data["label"]],
+                padding="max_length",
+                max_length=5,
+                truncation=True,
+                return_tensors="pt",
+            )
+            # Use -100 to focus on training the answer part, rather than pad
+            # tokens
+            answer.masked_fill_(answer == self.tokenizer.pad_token_id, -100)
+            data["answer"] = answer
+        else:
+            if self.use_matcher:
+                # prevent any modification to data, also prevent checkpoint storing
+                # data to gpu by moving
+                data = copy.deepcopy(data)
+                if self.matcher_mode == "embedding":
+                    target = " @ ".join(sorted(list(set(data["target"]))))
+                    target_mask = []
+                    for c in target:
+                        if c == "@":
+                            target_mask.append("-")
+                        else:
+                            target_mask.append("+")
+                    target_mask = "".join(target_mask)
+
+                    match = self.matcher.match_by_node_embedding(
+                        data["text_question"],
+                        target_sentence=target,
+                        target_mask=target_mask,
+                        seed=self.matcher_seed,
+                        max_times=self.matcher_config["question_match_max_times"],
+                        max_depth=self.matcher_config["question_match_max_depth"],
+                        edge_top_k=self.matcher_config["question_match_edge_top_k"],
+                        source_context_range=self.matcher_config[
+                            "question_match_source_context_range"
+                        ],
+                    )
+                    selection = self.matcher.select_paths(
+                        match,
+                        max_edges=self.matcher_config["question_select_max_edges"],
+                        discard_edges_if_rank_below=self.matcher_config[
+                            "question_select_discard_edges_if_rank_below"
+                        ],
+                    )
+                    new_question = self.matcher.insert_selection_at_end_preserve_case(
+                        data["text_question"], selection
+                    )
+
+                    new_choices = []
+                    for choice in data["choices"]:
+                        match = self.matcher.match_by_node_embedding(
+                            choice,
+                            target_sentence=target,
+                            target_mask=target_mask,
+                            seed=self.matcher_seed,
+                            max_times=self.matcher_config["choices_match_max_times"],
+                            max_depth=self.matcher_config["choices_match_max_depth"],
+                            edge_top_k=self.matcher_config["choices_match_edge_top_k"],
+                            source_context_range=self.matcher_config[
+                                "choices_match_source_context_range"
+                            ],
+                        )
+                        selection = self.matcher.select_paths(
+                            match,
+                            max_edges=self.matcher_config["choices_select_max_edges"],
+                            discard_edges_if_rank_below=self.matcher_config[
+                                "choices_select_discard_edges_if_rank_below"
+                            ],
+                        )
+
+                        new_choices.append(
+                            self.matcher.insert_selection_at_end_preserve_case(
+                                choice, selection,
+                            )
+                        )
+                elif self.matcher_mode == "none":
+                    new_question = data["text_question"]
+                    new_choices = data["choices"]
+                else:
+                    raise ValueError(f"Invalid match mode {self.matcher_mode}")
+
+                sentences, masks, type_ids = [], [], []
+                for choice in new_choices:
+                    encoded_sentence = self.tokenizer(
+                        new_question,
+                        choice,
+                        padding="max_length",
+                        max_length=self.max_seq_length,
+                        truncation=True,
+                        return_tensors="pt",
+                    )
+                    sentences.append(encoded_sentence.input_ids)
+                    masks.append(encoded_sentence.attention_mask)
+                    type_ids.append(encoded_sentence.token_type_ids)
+                data["sentence"] = t.stack(sentences, dim=1)
+                data["mask"] = t.stack(masks, dim=1)
+                data["type_ids"] = t.stack(type_ids, dim=1)
+            else:
+                sentences, masks, type_ids = [], [], []
+                for choice in data["choices"]:
+                    encoded_sentence = self.tokenizer(
+                        data["text_question"],
+                        choice,
+                        padding="max_length",
+                        max_length=self.max_seq_length,
+                        truncation=True,
+                        return_tensors="pt",
+                    )
+                    sentences.append(encoded_sentence.input_ids)
+                    masks.append(encoded_sentence.attention_mask)
+                    type_ids.append(encoded_sentence.token_type_ids)
+                data["sentence"] = t.stack(sentences, dim=1)
+                data["mask"] = t.stack(masks, dim=1)
+                data["type_ids"] = t.stack(type_ids, dim=1)
         return data
 
     def validate_logits(self, batch: BatchEncoding, logits: t.Tensor):
@@ -250,6 +366,33 @@ class ARCDataset:
         print(f"Logit correct types: {logit_correct_type_count}")
         return {"accuracy": float(np.sum(labels == ref_labels)) / len(labels)}
 
+    def validate_tokens(self, batch: BatchEncoding, tokens: t.Tensor):
+        total = tokens.shape[0]
+        correct = 0
+        missing = 0
+        answers = {}
+        labels = self.generate_labels()
+        for i in range(tokens.shape[0]):
+            answer = self.tokenizer.decode(tokens[i], skip_special_tokens=True)
+            ref_answer = labels[batch["label"][i]]
+            sentence = self.tokenizer.decode(
+                batch["sentence"][i], skip_special_tokens=True
+            )
+            answers[batch["id"][i]] = False
+            if answer == ref_answer:
+                correct += 1
+                answers[batch["id"][i]] = True
+            elif answer not in labels:
+                missing += 1
+            print(
+                f"sentence: [{sentence}] \n"
+                f"answer: [{answer}] \n"
+                f"ref_answer: [{ref_answer}]"
+            )
+
+        print(f"Missing ratio {float(missing) / total}")
+        return {"accuracy": float(correct) / total}
+
     def generate_test_result_logits(self, logits: t.Tensor, directory: str):
         choice_mask = t.cat([d["choice_mask"] for d in self.test_data], dim=0)
         logits = (logits.cpu() - choice_mask * 1e7).numpy()
@@ -263,7 +406,38 @@ class ARCDataset:
                     f"test size {len(self.test_data)}"
                 )
             for label, preprocessed in zip(labels, self.test_data):
-                file.write(f"{preprocessed['id']},{preprocessed['choice_labels']}\n")
+                file.write(
+                    f"{preprocessed['id']},{preprocessed['choice_labels'][label]}\n"
+                )
+
+    def generate_test_result_tokens(self, tokens: t.Tensor, directory: str):
+        missing = 0
+        with open_file_with_create_directories(
+            os.path.join(directory, "arc.csv"), "w"
+        ) as file:
+            if tokens.shape[0] != len(self.test_data):
+                raise ValueError(
+                    f"Token size {tokens.shape[0]} does not match "
+                    f"test size {len(self.test_data)}"
+                )
+            labels = self.generate_labels()
+            for answer_tokens, preprocessed in zip(tokens, self.test_data):
+                answer = self.tokenizer.decode(answer_tokens, skip_special_tokens=True)
+                for i, choice in enumerate(labels):
+                    if answer == choice:
+                        file.write(
+                            f"{preprocessed['id']},{preprocessed['choice_labels'][i]}\n"
+                        )
+                        break
+                else:
+                    missing += 1
+                    print(
+                        f"Missing answer, answer: {answer}, using first label as answer."
+                    )
+                    file.write(
+                        f"{preprocessed['id']},{preprocessed['choice_labels'][0]}"
+                    )
+        print(f"Missing ratio {float(missing) / len(self.test_data)}")
 
     def set_corpus(self):
         corpus = []
@@ -341,14 +515,10 @@ class ARCDataset:
         with open_file_with_create_directories(path, "r") as file:
             for line in file:
                 entry = json.loads(line)
-                text_choices = self.generate_choice_str(
-                    [ch["text"] for ch in entry["question"]["choices"]] + [""]
-                )
 
-                choices = [
-                    f"{ch['text'].lower().strip(',')}"
-                    for ch in entry["question"]["choices"]
-                ]
+                choices = [ch["text"] for ch in entry["question"]["choices"]]
+
+                text_choices = self.generate_choice_str(choices + [""])
 
                 tokens = nltk.word_tokenize(entry["fact1"])
                 allowed_tokens = []
@@ -392,4 +562,14 @@ class ARCDataset:
             )
 
     def generate_choice_str(self, choices: List[str]):
-        return ", ".join(choices)
+        result = ""
+        for label, choice in zip(self.generate_labels(), choices):
+            if len(choice) > 0:
+                result += label + " " + choice + " "
+        return result
+
+    def generate_labels(self):
+        labels = []
+        for char in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            labels.append(f"[{char}]")
+        return labels

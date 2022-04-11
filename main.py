@@ -66,7 +66,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     if args.command in ("train", "validate", "test"):
-        ctx = get_context("spawn")
         config = load_config(args.config)
         assert len(config.stages) == len(
             config.configs

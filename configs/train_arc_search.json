@@ -27,10 +27,10 @@
             "reranker_optimizer_class": "AdamW",
 
             "epochs": 15,
-            "load_worker_num": 0,
-            "load_prefetch_per_worker": 2,
+            "load_worker_num": 4,
+            "load_prefetch_per_worker": 8,
 
-            "load": true,
+            "load": false,
             "seed": 697474,
             "save": true
         }

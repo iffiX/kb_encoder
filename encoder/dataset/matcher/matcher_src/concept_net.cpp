@@ -10,6 +10,7 @@
 #include <memory>
 #include <regex>
 #include <fstream>
+#include <filesystem>
 
 using namespace std;
 
@@ -50,6 +51,11 @@ ConceptNetReader::read(const std::string &assertionPath, const std::string &weig
             throw std::invalid_argument("Weight path specified but hdf5 output path not specified.");
         readWeights(weightPath);
     }
+
+    auto hdf5Directory = std::filesystem::path(weightHDF5Path).parent_path();
+    auto ret = std::filesystem::create_directories(hdf5Directory);
+    if (not ret)
+        throw std::runtime_error("Failed to create parent directory for the HDF5 file.");
 
     tqdm bar;
     bar.set_theme_basic();
