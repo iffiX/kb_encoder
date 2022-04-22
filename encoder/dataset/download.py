@@ -187,3 +187,32 @@ class QASC:
                 logging.info("Decompressing")
                 decompress_tar_gz(str(data_path) + ".tar.gz", data_path)
         return self
+
+
+class UnifiedQAIR:
+    UNIFIEDQA_IR_URL = (
+        "https://github.com/allenai/unifiedqa/raw/master/files/"
+        "arc-with-ir/ARC-OBQA-RegLivEnv-IR10V8.zip"
+    )
+
+    def __init__(self):
+        unifiedqa_ir_path = str(os.path.join(dataset_cache_dir, "unifiedqa_ir"))
+        self.train_path = os.path.join(
+            unifiedqa_ir_path, "ARC-OBQA-RegLivEnv-IR10V8", "train.jsonl",
+        )
+        self.validate_path = os.path.join(
+            unifiedqa_ir_path, "ARC-OBQA-RegLivEnv-IR10V8", "dev.jsonl",
+        )
+        self.test_path = os.path.join(
+            unifiedqa_ir_path, "ARC-OBQA-RegLivEnv-IR10V8", "test.jsonl",
+        )
+
+    def require(self):
+        unifiedqa_ir_path = str(os.path.join(dataset_cache_dir, "unifiedqa_ir"))
+        if not os.path.exists(unifiedqa_ir_path):
+            if not os.path.exists(str(unifiedqa_ir_path) + ".zip"):
+                logging.info("Downloading UnifiedQA IR annotations")
+                download_to(self.UNIFIEDQA_IR_URL, str(unifiedqa_ir_path) + ".zip")
+            logging.info("Decompressing")
+            decompress_zip(str(unifiedqa_ir_path) + ".zip", unifiedqa_ir_path)
+        return self

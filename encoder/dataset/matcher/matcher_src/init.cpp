@@ -29,6 +29,7 @@ void handler(int sig) {
 
 #endif
 
+#if defined(_OPENMP)
 void set_omp_max_threads(int num) {
     if (num <= 0)
         throw std::invalid_argument("Thread num must be a number larger than 0!");
@@ -36,6 +37,7 @@ void set_omp_max_threads(int num) {
     int omp_max_threads = cores > num ? num : cores;
     omp_set_num_threads(omp_max_threads);
 }
+#endif
 
 namespace py = pybind11;
 
@@ -44,7 +46,9 @@ PYBIND11_MODULE(matcher, m) {
     signal(SIGSEGV, handler);
 #endif
     backward::SignalHandling sh{};
+#if defined(_OPENMP)
     m.def("set_omp_max_threads", &set_omp_max_threads);
+#endif
     py::class_<KnowledgeBase>(m, "KnowledgeBase")
             .def(py::init<>())
             .def_readonly("edge_to_target", &KnowledgeBase::edgeToTarget)

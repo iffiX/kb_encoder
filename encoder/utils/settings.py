@@ -34,6 +34,7 @@ preprocess_cache_dir = str(
 inspect_data_dir = str(
     os.path.abspath(os.path.join(ROOT, "data", "inspect"))
 )  # type: str
+bin_dir = str(os.path.abspath(os.path.join(ROOT, "data", "bin")))
 mongo_config = {
     "is_docker": False,
     "mongo_local_path": str(os.path.abspath(os.path.join(ROOT, "data", "mongo"))),

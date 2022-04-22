@@ -9,8 +9,6 @@ from torch.distributed import all_gather_object, get_world_size, get_rank
 from transformers import T5ForConditionalGeneration, AutoTokenizer, BatchEncoding
 from pytorch_lightning.utilities import rank_zero_only
 from encoder.model.model import Model
-
-from encoder.model.t5_model import T5ForConditionalGenerationForPipeline
 from encoder.dataset.base import collate_function_dict_to_batch_encoding
 from encoder.dataset.arc import ARCDataset
 from encoder.utils.config import ARCTrainConfig, fix_missing
@@ -57,7 +55,7 @@ class ARCTrainer(pl.LightningModule):
             output_mode="single" if "t5-" in config.base_type else "splitted",
         )
         if "t5-" in config.base_type:
-            self.model = T5ForConditionalGenerationForPipeline.from_pretrained(
+            self.model = T5ForConditionalGeneration.from_pretrained(
                 config.base_type,
                 cache_dir=model_cache_dir,
                 proxies=proxies,
@@ -133,8 +131,7 @@ class ARCTrainer(pl.LightningModule):
             ]
             # replace device property
             self._real_device = f"cuda:{start_device_id}"
-            # self.model.parallelize(self.config.device_map)
-            self.model.parallelize(self.config.device_map, self.config.pipe_chunks)
+            self.model.parallelize(self.config.device_map)
         else:
             self._real_device = None
         self.dataset.set_search_targets(self.load_targets())
@@ -163,11 +160,13 @@ class ARCTrainer(pl.LightningModule):
         if "t5-" in self.config.base_type:
             out = self.model.generate(
                 batch["sentence"].to(self.real_device),
-                max_length=5,
+                max_length=self.config.generate_length,
                 attention_mask=batch["mask"].to(self.real_device),
                 early_stopping=True,
             )
-            result = t.full([out.shape[0], 5], self.tokenizer.pad_token_id)
+            result = t.full(
+                [out.shape[0], self.config.generate_length], self.tokenizer.pad_token_id
+            )
             result[:, : out.shape[1]] = out.cpu()
             batch = batch.to("cpu")
             return {

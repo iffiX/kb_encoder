@@ -556,12 +556,32 @@ class OpenBookQADataset:
                         file.write(f"{preprocessed['id']},{answer_keys[i]}\n")
                         break
                 else:
-                    missing += 1
-                    print(
-                        f"Missing answer, choices: {preprocessed['choices']}, "
-                        f"answer: {answer}, using default A as answer."
-                    )
-                    file.write(f"{preprocessed['id']},A")
+                    is_missing = True
+                    if self.match_closest_when_no_equal:
+                        # Gestalt Pattern Matching
+                        # https://en.wikipedia.org/wiki/Gestalt_Pattern_Matching
+                        possible_matches = difflib.get_close_matches(
+                            answer, preprocessed["choices"], n=1
+                        )
+                        if not len(possible_matches) == 0:
+                            print(
+                                f"Using answer {possible_matches[0]} for output {answer}, "
+                                f"question: {preprocessed['text_question']}, "
+                                f"choices: {preprocessed['choices']}"
+                            )
+                            is_missing = False
+                            file.write(
+                                f"{preprocessed['id']},"
+                                f"{answer_keys[preprocessed['choices'].index(possible_matches[0])]}\n"
+                            )
+
+                    if is_missing:
+                        missing += 1
+                        print(
+                            f"Missing answer, choices: {preprocessed['choices']}, "
+                            f"answer: {answer}, using default A as answer."
+                        )
+                        file.write(f"{preprocessed['id']},A")
         print(f"Missing ratio {float(missing) / len(self.test_data)}")
 
     def set_corpus(self):

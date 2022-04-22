@@ -163,6 +163,7 @@ class ARCTrainConfig(BaseModel):
     base_type: str = "microsoft/deberta-v3-large"
     model_configs: Optional[dict] = None
     max_seq_length: int = 128
+    generate_length: int = 10
     device_map: Optional[Dict[int, List[int]]] = None
     pipe_chunks: Optional[int] = 8
     load_worker_num: Optional[int] = 0
