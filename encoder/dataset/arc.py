@@ -304,11 +304,14 @@ class ARCDataset:
             )
 
             choice_annotations = []
-            for label, choice in zip(self.generate_labels(), data["choices"]):
+            for label, choice, match_mask in zip(
+                self.generate_labels(), data["choices"], data["choice_match_masks"],
+            ):
                 if len(choice) > 0:
                     match = self.matcher.match_by_node_embedding(
                         choice,
                         target_sentence=target,
+                        source_mask=match_mask,
                         target_mask=target_mask,
                         seed=self.matcher_seed,
                         max_times=self.matcher_config["choices_match_max_times"],
@@ -626,8 +629,9 @@ class ARCDataset:
                 entry = json.loads(line)
                 choices = [ch["text"] for ch in entry["question"]["choices"]]
                 choice_labels = [ch["label"] for ch in entry["question"]["choices"]]
+                original_choice_num = len(choices)
                 if len(choices) < 5:
-                    diff = 5 - len(choices)
+                    diff = 5 - original_choice_num
                     choices += [""] * diff
                     choice_labels += [""] * diff
                 choice_mask = t.FloatTensor(
@@ -641,6 +645,10 @@ class ARCDataset:
                     "choices": choices,
                     "choice_labels": choice_labels,
                     "choice_mask": choice_mask,
+                    "choice_match_masks": self.generate_choice_match_mask(
+                        choices[:original_choice_num]
+                    )
+                    + [""] * (5 - original_choice_num),
                     "id": entry["id"],
                     "original_split": original_split,
                     "original_index": idx,
@@ -691,6 +699,8 @@ class ARCDataset:
                     "choices": choices + [""],
                     "choice_labels": ["A", "B", "C", "D", ""],
                     "choice_mask": t.FloatTensor([[0, 0, 0, 0, 1]]),
+                    "choice_match_masks": self.generate_choice_match_mask(choices[:4])
+                    + [""],
                     "id": entry["id"],
                     "original_split": "",
                     "original_index": -1,
@@ -717,6 +727,44 @@ class ARCDataset:
                 },
                 file,
             )
+
+    def generate_choice_match_mask(self, choices: List[str]):
+        wnl = WordNetLemmatizer()
+        choices_tokens = [nltk.word_tokenize(choice) for choice in choices]
+        choices_lemma_tokens = [
+            [wnl.lemmatize(token).lower() for token in tokens]
+            for tokens in choices_tokens
+        ]
+        choices_lemma_tokens_set = [
+            set(lemma_tokens) for lemma_tokens in choices_lemma_tokens
+        ]
+        choices_token_is_common = [[]] * len(choices)
+        # find common tokens
+        for lemma_tokens, common_list in zip(
+            choices_lemma_tokens, choices_token_is_common
+        ):
+            for token in lemma_tokens:
+                if all(
+                    token in other_lemma_tokens_set
+                    for other_lemma_tokens_set in choices_lemma_tokens_set
+                ):
+                    common_list.append(True)
+                else:
+                    common_list.append(False)
+
+        # generate mask
+        masks = []
+        for choice, tokens, common_list in zip(
+            choices, choices_tokens, choices_token_is_common
+        ):
+            mask = ["+"] * len(choice)
+            start = 0
+            for token, is_common in zip(tokens, common_list):
+                if is_common and re.search(r"^[a-zA-Z]", token):
+                    start = choice.index(token, start)
+                    mask[start : start + len(token)] = ["-"] * len(token)
+            masks.append("".join(mask))
+        return masks
 
     def generate_choice_str(self, choices: List[str]):
         result = ""

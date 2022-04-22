@@ -19,14 +19,14 @@ if __name__ == "__main__":
             "choices_match_max_times": 1000,
             "choices_match_max_depth": 1,
             "choices_match_edge_top_k": 10,
-            "choices_match_source_context_range": 3,
+            "choices_match_source_context_range": 0,
             "choices_select_max_edges": 3,
             "choices_select_discard_edges_if_rank_below": 0.4,
         },
     )
     # with open(os.path.join(preprocess_cache_dir, "arc_targets.json"), "r") as file:
     #     dataset.set_search_targets(json.load(file))
-    # pprint.pprint(dataset.generate_t5_annotation(dataset.test_data[7]))
+    # pprint.pprint(dataset.generate_t5_annotation(dataset.test_data[0]))
     dataset.generate_all_t5_data()
 
 # import os
