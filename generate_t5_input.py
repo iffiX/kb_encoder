@@ -10,23 +10,23 @@ if __name__ == "__main__":
         matcher_mode="embedding",
         matcher_seed=697474,
         matcher_config={
-            "question_match_max_times": 1000,
+            "question_match_max_times": 300,
             "question_match_max_depth": 1,
             "question_match_edge_top_k": 10,
             "question_match_source_context_range": 0,
-            "question_select_max_edges": 2,
+            "question_select_max_edges": 3,
             "question_select_discard_edges_if_rank_below": 0.4,
             "choices_match_max_times": 1000,
-            "choices_match_max_depth": 1,
-            "choices_match_edge_top_k": 10,
+            "choices_match_max_depth": 2,
+            "choices_match_edge_top_k": 20,
             "choices_match_source_context_range": 0,
             "choices_select_max_edges": 3,
-            "choices_select_discard_edges_if_rank_below": 0.4,
+            "choices_select_discard_edges_if_rank_below": 0.2,
         },
     )
     # with open(os.path.join(preprocess_cache_dir, "arc_targets.json"), "r") as file:
     #     dataset.set_search_targets(json.load(file))
-    # pprint.pprint(dataset.generate_t5_annotation(dataset.test_data[0]))
+    # pprint.pprint(dataset.generate_t5_annotation(dataset.test_data[7]))
     dataset.generate_all_t5_data()
 
 # import os

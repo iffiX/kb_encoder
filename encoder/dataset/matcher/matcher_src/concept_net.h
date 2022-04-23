@@ -10,6 +10,7 @@ public:
     KnowledgeBase
     read(const std::string &assertionPath,
          const std::string &weightPath = "",
+         const std::string &weightStyle = "numberbatch",
          const std::string &weightHDF5Path = "conceptnet_weights.hdf5",
          bool simplifyWithInt8 = true);
 
@@ -19,7 +20,7 @@ private:
     size_t dim = 0;
     Trie weightNameTrie;
 
-    void readWeights(const std::string &weightPath);
+    void readWeights(const std::string &weightPath, const std::string &weightStyle);
 };
 
 #endif //CONCEPT_NET_H

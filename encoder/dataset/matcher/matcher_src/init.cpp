@@ -167,6 +167,7 @@ PYBIND11_MODULE(matcher, m) {
             .def("read", &ConceptNetReader::read,
                  py::arg("asserion_path"),
                  py::arg("weight_path") = "",
+                 py::arg("weight_style") = "numberbatch",
                  py::arg("weight_hdf5_path") = "conceptnet_weights.hdf5",
                  py::arg("simplify_with_int8") = true);
 

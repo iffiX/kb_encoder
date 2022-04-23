@@ -12,6 +12,9 @@
 #include <fstream>
 #include <filesystem>
 
+#define CONCPETNET_LINES 34074917
+#define GLOVE_42B_300D_LINES 1917494
+
 using namespace std;
 
 string replaceAllChar(const string &input, char pattern, char replace) {
@@ -23,8 +26,10 @@ string replaceAllChar(const string &input, char pattern, char replace) {
 
 vector<int> string2Vec(const string &input) {
     vector<int> vec;
-    for (char c : input)
-        vec.push_back(int(c) + 1000);  // prevent negative value when encontering non ASCII characters
+    for (char c : input) {
+        // prevent negative value when encontering non ASCII characters, since char is signed
+        vec.push_back(int(c) + 1000);
+    }
     return move(vec);
 }
 
@@ -36,7 +41,7 @@ string vec2String(const vector<int> &input) {
 }
 
 KnowledgeBase
-ConceptNetReader::read(const std::string &assertionPath, const std::string &weightPath,
+ConceptNetReader::read(const std::string &assertionPath, const std::string &weightPath, const std::string &weightStyle,
                        const std::string &weightHDF5Path, bool simplifyWithInt8) {
     KnowledgeBase kb;
 
@@ -49,18 +54,18 @@ ConceptNetReader::read(const std::string &assertionPath, const std::string &weig
     if (not weightPath.empty()) {
         if (weightHDF5Path.empty())
             throw std::invalid_argument("Weight path specified but hdf5 output path not specified.");
-        readWeights(weightPath);
+        readWeights(weightPath, weightStyle);
     }
 
     auto hdf5Directory = std::filesystem::path(weightHDF5Path).parent_path();
-    auto ret = std::filesystem::create_directories(hdf5Directory);
-    if (not ret)
-        throw std::runtime_error("Failed to create parent directory for the HDF5 file.");
-
+    if (not std::filesystem::exists(hdf5Directory)){
+        auto ret = std::filesystem::create_directories(hdf5Directory);
+        if (not ret)
+            throw std::runtime_error("Failed to create parent directory for the HDF5 file.");
+    }
     tqdm bar;
     bar.set_theme_basic();
     bar.disable_colors();
-    size_t estimateNum = 100000;
     size_t processed = 0;
 
     cout << "Begin processing ConceptNet." << endl;
@@ -132,16 +137,12 @@ ConceptNetReader::read(const std::string &assertionPath, const std::string &weig
             kb.edgeToTarget[tarId].push_back(kb.edges.size());
             kb.edgeFromSource[srcId].push_back(kb.edges.size());
             kb.edges.emplace_back(make_tuple(srcId, relId, tarId, weight, annotation));
-            processed++;
-            if (processed > estimateNum) {
-                estimateNum *= 2;
-                cout << endl << "Update estimation of total number." << endl;
-            }
-            bar.progress(processed, estimateNum);
         }
+        processed++;
+        bar.progress(processed, CONCPETNET_LINES);
     }
     bar.finish();
-    cout << "ConceptNet processed lines: " << processed << endl;
+    cout << "ConceptNet statistics: " << endl;
     cout << "Node num: " << kb.nodes.size() << endl;
     cout << "Edge num: " << kb.edges.size() << endl;
     cout << "Relation num: " << kb.relationships.size() << endl;
@@ -192,7 +193,7 @@ ConceptNetReader::read(const std::string &assertionPath, const std::string &weig
                 exactMatch += 1;
             } else {
                 // Find all matching raw weight names, use their average embedding
-                // If there is no matching, set one element to 1
+                // If there is no matching, set the first element to 1
                 auto sentence = string2Vec(cleaned);
                 auto result = weightNameTrie.matchForAll(sentence, false);
                 xt::xtensor<float, 1> emb(xt::xtensor<float, 1>::shape_type{dim}, 0);
@@ -234,7 +235,7 @@ ConceptNetReader::read(const std::string &assertionPath, const std::string &weig
     return kb;
 }
 
-void ConceptNetReader::readWeights(const std::string &weightPath) {
+void ConceptNetReader::readWeights(const std::string &weightPath, const std::string &weightStyle) {
     ifstream file(weightPath);
 
     string line, numString, dimString;
@@ -243,29 +244,61 @@ void ConceptNetReader::readWeights(const std::string &weightPath) {
     bar.set_theme_basic();
     bar.disable_colors();
 
-    getline(file, line);
-    istringstream first(line);
-    first >> numString >> dimString;
-    size_t num = stoi(numString);
-    dim = stoi(dimString);
-    size_t processed = 0;
+    if (not file.is_open())
+        throw std::invalid_argument(fmt::format("Cannot open weight path {}", weightPath));
 
-    cout << "Begin processing ConceptNet NumberBatch." << endl;
-    weights = make_unique<float[]>(num * dim);
-    while (getline(file, line)) {
-        istringstream is(line);
-        string name, weight;
-        is >> name;
-        size_t offset = processed * dim;
-        for (size_t i = 0; i < dim; i++) {
-            is >> weight;
-            weights.get()[offset + i] = stof(weight);
+    if (weightStyle == "numberbatch") {
+        getline(file, line);
+        istringstream first(line);
+        first >> numString >> dimString;
+        size_t num = stoi(numString);
+        dim = stoi(dimString);
+        size_t processed = 0;
+
+        cout << "Begin processing ConceptNet NumberBatch." << endl;
+        weights = make_unique<float[]>(num * dim);
+        while (getline(file, line)) {
+            istringstream is(line);
+            string name, weight;
+            is >> name;
+            size_t offset = processed * dim;
+            for (size_t i = 0; i < dim; i++) {
+                is >> weight;
+                weights.get()[offset + i] = stof(weight);
+            }
+            name = replaceAllChar(name, '_', ' ');
+            weightNames[name] = processed;
+            weightNameTrie.insert(string2Vec(name));
+            processed++;
+            bar.progress(processed, num);
         }
-        name = replaceAllChar(name, '_', ' ');
-        weightNames[name] = processed;
-        weightNameTrie.insert(string2Vec(name));
-        processed++;
-        bar.progress(processed, num);
     }
+    else if (weightStyle.size() > 5 & weightStyle.compare(0, 5, "glove") == 0) {
+        size_t num;
+        if (weightStyle == "glove_42b_300d")
+            num=GLOVE_42B_300D_LINES, dim = 300;
+        else
+            throw std::invalid_argument(fmt::format("Invalid GloVe weight style {}", weightStyle));
+        size_t processed = 0;
+
+        cout << "Begin processing GloVe." << endl;
+        weights = make_unique<float[]>(num * dim);
+        while (getline(file, line)) {
+            istringstream is(line);
+            string name, weight;
+            is >> name;
+            size_t offset = processed * dim;
+            for (size_t i = 0; i < dim; i++) {
+                is >> weight;
+                weights.get()[offset + i] = stof(weight);
+            }
+            weightNames[name] = processed;
+            weightNameTrie.insert(string2Vec(name));
+            processed++;
+            bar.progress(processed, num);
+        }
+    }
+    else
+        throw std::invalid_argument(fmt::format("Invalid weight style {}", weightStyle));
     bar.finish();
 }

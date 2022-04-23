@@ -26,9 +26,6 @@ class ConceptNet:
         self.numberbatch_path = str(
             os.path.join(dataset_cache_dir, "conceptnet-numberbatch.txt")
         )
-        self.embedding_path = str(
-            os.path.join(preprocess_cache_dir, "conceptnet-embedding.hdf5")
-        )
 
     def require(self):
         for task, data_path, url in (
@@ -41,6 +38,41 @@ class ConceptNet:
                     download_to(url, str(data_path) + ".gz")
                 logging.info("Decompressing")
                 decompress_gz(str(data_path) + ".gz", data_path)
+        return self
+
+
+class ConceptNetWithGloVe:
+    ASSERTION_URL = (
+        "https://s3.amazonaws.com/conceptnet/downloads/2019/edges/"
+        "conceptnet-assertions-5.7.0.csv.gz"
+    )
+    GLOVE_URL = (
+        "https://huggingface.co/stanfordnlp/glove/resolve/main/glove.42B.300d.zip"
+    )
+
+    def __init__(self):
+        self.assertion_path = str(
+            os.path.join(dataset_cache_dir, "conceptnet-assertions.csv")
+        )
+        self.glove_path = str(
+            os.path.join(dataset_cache_dir, "glove.42B.300d", "glove.42B.300d.txt")
+        )
+
+    def require(self):
+        if not os.path.exists(self.assertion_path):
+            if not os.path.exists(str(self.assertion_path) + ".gz"):
+                logging.info(f"Downloading concept net assertions")
+                download_to(self.ASSERTION_URL, str(self.assertion_path) + ".gz")
+            logging.info("Decompressing")
+            decompress_gz(str(self.assertion_path) + ".gz", self.assertion_path)
+
+        glove_directory = os.path.join(dataset_cache_dir, "glove.42B.300d")
+        if not os.path.exists(glove_directory):
+            if not os.path.exists(str(glove_directory) + ".zip"):
+                logging.info(f"Downloading glove embedding")
+                download_to(self.GLOVE_URL, str(glove_directory) + ".zip")
+            logging.info("Decompressing")
+            decompress_zip(str(glove_directory) + ".zip", glove_directory)
         return self
 
 

@@ -305,7 +305,10 @@ class ARCDataset:
 
             choice_annotations = []
             for label, choice, match_mask in zip(
-                self.generate_labels(), data["choices"], data["choice_match_masks"],
+                self.generate_labels(),
+                data["choices"],
+                # self.generate_choice_match_mask(data["choices"])
+                data["choice_match_masks"],
             ):
                 if len(choice) > 0:
                     match = self.matcher.match_by_node_embedding(
@@ -609,14 +612,13 @@ class ARCDataset:
                 if key not in search_target:
                     raise ValueError(f"Entry {key} not found in search data")
 
-                tokens = nltk.word_tokenize(
-                    " ".join(search_target[key][:3]) + " " + data["text_question"]
-                )
                 allowed_tokens = []
-                tagged = nltk.pos_tag(tokens)
-                for token, pos in tagged:
-                    if pos.startswith("NN"):
-                        allowed_tokens.append(wnl.lemmatize(token))
+                for sentence in search_target[key][:1] + [data["text_question"]]:
+                    tokens = nltk.word_tokenize(sentence)
+                    tagged = nltk.pos_tag(tokens)
+                    for token, pos in tagged:
+                        if pos.startswith("NN"):
+                            allowed_tokens.append(wnl.lemmatize(token.lower()))
 
                 data["target"] = allowed_tokens if len(allowed_tokens) > 0 else [""]
                 data["facts"] = search_target[key]
@@ -682,12 +684,12 @@ class ARCDataset:
                 tagged = nltk.pos_tag(tokens)
                 for token, pos in tagged:
                     if pos.startswith("NN"):
-                        allowed_tokens.append(wnl.lemmatize(token))
+                        allowed_tokens.append(wnl.lemmatize(token.lower()))
 
                 if len(allowed_tokens) < 3:
                     for token, pos in tagged:
                         if pos.startswith("JJ"):
-                            allowed_tokens.append(wnl.lemmatize(token))
+                            allowed_tokens.append(wnl.lemmatize(token.lower()))
                 if len(allowed_tokens) == 0:
                     allowed_tokens.append("")
 
@@ -729,24 +731,28 @@ class ARCDataset:
             )
 
     def generate_choice_match_mask(self, choices: List[str]):
+        valid_choice_num = sum(len(choice) > 0 for choice in choices)
         wnl = WordNetLemmatizer()
         choices_tokens = [nltk.word_tokenize(choice) for choice in choices]
         choices_lemma_tokens = [
-            [wnl.lemmatize(token).lower() for token in tokens]
+            [wnl.lemmatize(token.lower()) for token in tokens]
             for tokens in choices_tokens
         ]
         choices_lemma_tokens_set = [
             set(lemma_tokens) for lemma_tokens in choices_lemma_tokens
         ]
-        choices_token_is_common = [[]] * len(choices)
+        choices_token_is_common = [[] for _ in range(len(choices))]
         # find common tokens
         for lemma_tokens, common_list in zip(
             choices_lemma_tokens, choices_token_is_common
         ):
             for token in lemma_tokens:
-                if all(
-                    token in other_lemma_tokens_set
-                    for other_lemma_tokens_set in choices_lemma_tokens_set
+                if (
+                    sum(
+                        token in other_lemma_tokens_set
+                        for other_lemma_tokens_set in choices_lemma_tokens_set
+                    )
+                    >= 2
                 ):
                     common_list.append(True)
                 else:
