@@ -353,7 +353,7 @@ class ARCDataset:
         annotation = " \\n " + annotation if len(annotation) > 0 else annotation
         return annotation
 
-    def generate_all_t5_data(self):
+    def generate_all_t5_data(self, split=None):
         train_data, val_data, test_data, val_original_data, test_original_data = (
             [],
             [],
@@ -365,31 +365,39 @@ class ARCDataset:
             initializer=self.initialize_pool,
             initargs=(self.matcher_mode, self.matcher_seed, self.matcher_config),
         ) as pool:
-            for split, target, source in (
-                ("train", train_data, self.train_data),
-                ("validate", val_data, self.validate_data),
-                ("test", test_data, self.test_data),
-                ("validate_original", val_original_data, self.validate_data),
-                ("test_original", test_original_data, self.test_data),
+            for process_split, path, target, source in (
+                ("train", "arc_train_for_t5.json", train_data, self.train_data),
+                ("validate", "arc_validate_for_t5.json", val_data, self.validate_data),
+                ("test", "arc_test_for_t5.json", test_data, self.test_data),
+                (
+                    "validate_original",
+                    "arc_validate_original_for_t5.json",
+                    val_original_data,
+                    self.validate_data,
+                ),
+                (
+                    "test_original",
+                    "arc_test_original_for_t5.json",
+                    test_original_data,
+                    self.test_data,
+                ),
             ):
-                print(f"Processing {split}")
+                if split is not None:
+                    if (isinstance(split, str) and process_split != split) or (
+                        isinstance(split, list) and process_split not in split
+                    ):
+                        continue
+                print(f"Processing {process_split}")
                 with tqdm.tqdm(total=len(source)) as pbar:
                     for result in pool.imap_unordered(
                         self.generate_t5_input,
-                        [(split, i) for i in range(len(source))],
+                        [(process_split, i) for i in range(len(source))],
                     ):
                         pbar.update()
                         target.append(result)
 
-        for path, data in (
-            ("arc_train_for_t5.json", train_data),
-            ("arc_validate_for_t5.json", val_data),
-            ("arc_test_for_t5.json", test_data),
-            ("arc_validate_original_for_t5.json", val_original_data),
-            ("arc_test_original_for_t5.json", test_original_data),
-        ):
-            with open(os.path.join(preprocess_cache_dir, path), "w") as file:
-                json.dump(data, file, indent=2)
+                with open(os.path.join(preprocess_cache_dir, path), "w") as file:
+                    json.dump(target, file, indent=2)
 
     @staticmethod
     def initialize_pool(matcher_mode, matcher_seed, matcher_config):
@@ -743,16 +751,16 @@ class ARCDataset:
         ]
         choices_token_is_common = [[] for _ in range(len(choices))]
         # find common tokens
-        for lemma_tokens, common_list in zip(
-            choices_lemma_tokens, choices_token_is_common
+        for choice_idx, (lemma_tokens, common_list) in enumerate(
+            zip(choices_lemma_tokens, choices_token_is_common)
         ):
             for token in lemma_tokens:
-                if (
-                    sum(
-                        token in other_lemma_tokens_set
-                        for other_lemma_tokens_set in choices_lemma_tokens_set
-                    )
-                    >= 2
+                if sum(
+                    token in other_lemma_tokens_set
+                    for other_lemma_tokens_set in choices_lemma_tokens_set
+                ) == valid_choice_num or any(
+                    token in other_lemma_tokens_set
+                    for other_lemma_tokens_set in choices_lemma_tokens_set[:choice_idx]
                 ):
                     common_list.append(True)
                 else:
