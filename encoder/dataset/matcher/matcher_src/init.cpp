@@ -67,6 +67,7 @@ PYBIND11_MODULE(matcher, m) {
             .def("disable_edges_with_weight_below", &KnowledgeBase::disableEdgesWithWeightBelow)
             .def("disable_edges_of_nodes", &KnowledgeBase::disableEdgesOfNodes)
             .def("disable_edges_of_relationships", &KnowledgeBase::disableEdgesOfRelationships)
+            .def("enable_edges_of_relationships", &KnowledgeBase::enableEdgesOfRelationships)
             .def("find_nodes", &KnowledgeBase::findNodes,
                  py::arg("nodes"),
                  py::arg("quiet") = false)

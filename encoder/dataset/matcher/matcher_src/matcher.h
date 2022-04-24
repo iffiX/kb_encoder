@@ -151,6 +151,8 @@ public:
 
     void disableEdgesOfRelationships(const std::vector<std::string> &relationships);
 
+    void enableEdgesOfRelationships(const std::vector<std::string> &relationships);
+
     void disableEdgesOfNodes(const std::vector<std::string> &nodes);
 
     std::vector<long> findNodes(const std::vector<std::string> &nodes, bool quiet = false) const;

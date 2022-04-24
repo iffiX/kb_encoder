@@ -64,13 +64,8 @@ class ARCMatcher(BaseMatcher):
             matcher = KnowledgeMatcher(archive_path)
         super(ARCMatcher, self).__init__(tokenizer, matcher)
 
-        matcher.kb.disable_edges_of_relationships(
-            [
-                "EtymologicallyDerivedFrom",
-                "EtymologicallyRelatedTo",
-                "RelatedTo",
-                "DefinedAs",
-            ]
+        matcher.kb.enable_edges_of_relationships(
+            ["DefinedAs", "DerivedFrom", "FormOf", "Synonym", "Antonym", "IsA", "HasA"]
         )
         self.matcher.kb.disable_edges_with_weight_below(1)
 

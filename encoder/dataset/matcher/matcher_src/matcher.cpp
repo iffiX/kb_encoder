@@ -271,6 +271,19 @@ void KnowledgeBase::disableEdgesOfRelationships(const vector<string> &rel) {
     }
 }
 
+void KnowledgeBase::enableEdgesOfRelationships(const vector<string> &rel) {
+    unordered_set<string> enabledSet(rel.begin(), rel.end());
+    unordered_set<long> enabledIds;
+    for (long relationshipId = 0; relationshipId < relationships.size(); relationshipId++) {
+        if (enabledSet.find(relationships[relationshipId]) != enabledSet.end())
+            enabledIds.insert(relationshipId);
+    }
+    for (size_t edgeIndex = 0; edgeIndex < edges.size(); edgeIndex++) {
+        if (enabledIds.find(get<1>(edges[edgeIndex])) == enabledIds.end())
+            isEdgeDisabled[edgeIndex] = true;
+    }
+}
+
 void KnowledgeBase::disableEdgesOfNodes(const vector<string> &nod) {
     unordered_set<string> disabledSet(nod.begin(), nod.end());
     unordered_set<long> disabledIds;

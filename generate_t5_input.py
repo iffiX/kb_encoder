@@ -26,7 +26,7 @@ if __name__ == "__main__":
     )
     # with open(os.path.join(preprocess_cache_dir, "arc_targets.json"), "r") as file:
     #     dataset.set_search_targets(json.load(file))
-    # pprint.pprint(dataset.generate_t5_annotation(dataset.test_data[5]))
+    # pprint.pprint(dataset.generate_t5_annotation(dataset.test_data[1067]))
     dataset.generate_all_t5_data(split="test")
 
 # import os
