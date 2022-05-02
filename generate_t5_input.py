@@ -2,6 +2,9 @@ import os
 import json
 import pprint
 from encoder.dataset.arc import ARCDataset
+from encoder.dataset.annotator.dedicated_annotators import *
+from encoder.dataset.annotator.numerical_annotator import NumericalAnnotator
+from encoder.dataset.annotator.simple_relation_miner import *
 from encoder.utils.settings import preprocess_cache_dir
 
 if __name__ == "__main__":
@@ -26,8 +29,29 @@ if __name__ == "__main__":
     )
     # with open(os.path.join(preprocess_cache_dir, "arc_targets.json"), "r") as file:
     #     dataset.set_search_targets(json.load(file))
-    # pprint.pprint(dataset.generate_t5_annotation(dataset.test_data[1067]))
-    dataset.generate_all_t5_data(split="test")
+    # for i in range(-100, 0, 1):
+    #     pprint.pprint(dataset.generate_t5_annotation(dataset.train_data[i]))
+    dataset.generate_all_t5_data()
+
+# if __name__ == "__main__":
+#     annotator = NumericalAnnotator()
+#     print(
+#         annotator.annotate(
+#             "An atom of beryllium has 4 protons, 4 electrons, and 5 neutrons. What is its mass number?",
+#             ["sulfur", "charge of +3.", "48", "52"],
+#         )
+#     )
+
+# if __name__ == "__main__":
+#     question = "An unbalanced equation for the reaction of methane gas (CH_{4}) with oxygen is shown below. CH_{4} + \\Box O_{2} -> 2CO_{2} + 4H_{2}O How many molecules of oxygen gas (O_{2}) are needed to properly balance this equation?"
+#     choices = [
+#         "1",
+#         "2",
+#         "3",
+#         "4",
+#     ]
+#     print(is_chemistry_balance_equation(question, choices))
+#     print(annotate_chemistry_balance_equation(question, choices))
 
 # import os
 # import json

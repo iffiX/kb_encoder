@@ -22,11 +22,16 @@ DATA_DIR = os.environ.get("DATA_DIR") or "gs://kb-encoder/preprocess"
 
 
 def align_match(target, prediction):
-    target_segments = [x for x in re.split(r"\{|\}|^| ", target) if len(x) > 0]
+    target_segments = [x for x in re.split(r"\{|\}|\^| ", target) if len(x) > 0]
     prediction_segments = [x for x in re.split(r" ⁇| ", prediction) if len(x) > 0]
-    return len(target_segments) == len(prediction_segments) and all(
+    if len(target_segments) == len(prediction_segments) and all(
         ts == ps for ts, ps in zip(target_segments, prediction_segments)
-    )
+    ):
+        return True
+    elif target_segments[: len(prediction_segments)] == prediction_segments:
+        print(f"Approximate match {target} ----- {prediction}")
+        return True
+    return False
 
 
 def customize_metric(targets, predictions):

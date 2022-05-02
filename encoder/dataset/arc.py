@@ -4,6 +4,7 @@ import copy
 import json
 import tqdm
 import pickle
+import random
 import difflib
 import logging
 import nltk
@@ -14,6 +15,7 @@ from typing import List, Dict
 from nltk.stem import WordNetLemmatizer
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, BatchEncoding
 from encoder.dataset.matcher.arc import ARCMatcher
+from encoder.dataset.annotator.core import Annotator
 from encoder.utils.settings import (
     preprocess_cache_dir,
     proxies,
@@ -62,6 +64,7 @@ class ARCDataset:
         self.output_mode = output_mode
 
         self.matcher = ARCMatcher(tokenizer=self.matcher_tokenizer)
+        self.annotator = Annotator()
         self.arc = ARC().require()
         self.openbook_qa = OpenBookQA().require()
 
@@ -72,9 +75,9 @@ class ARCDataset:
                 + self.parse_data(self.arc.train_easy_path, "train_easy")
                 + self.parse_data(self.arc.validate_easy_path, "validate_easy")
                 + self.parse_data(self.arc.test_easy_path, "test_easy")
-                + self.parse_openbook_qa_data(self.openbook_qa.train_path)
-                + self.parse_openbook_qa_data(self.openbook_qa.validate_path)
-                + self.parse_openbook_qa_data(self.openbook_qa.test_path)
+                # + self.parse_openbook_qa_data(self.openbook_qa.train_path)
+                # + self.parse_openbook_qa_data(self.openbook_qa.validate_path)
+                # + self.parse_openbook_qa_data(self.openbook_qa.test_path)
             )
             self.validate_data = self.parse_data(
                 self.arc.validate_challenge_path, "validate_challenge"
@@ -90,6 +93,7 @@ class ARCDataset:
                 self.validate_data = data["validate"]
                 self.test_data = data["test"]
         self.set_corpus()
+        self.add_kinematics_training_data()
 
     @property
     def train_dataset(self):
@@ -114,7 +118,7 @@ class ARCDataset:
             data = self.test_data[index]
         if self.output_mode == "single":
             if self.use_matcher:
-                annotation = self.generate_t5_annotation(data)
+                annotation = self.generate_t5_annotation(data, quiet=True)
                 encoded_sentence = self.tokenizer(
                     self.normalize_t5_input(
                         data["text_question"]
@@ -260,10 +264,15 @@ class ARCDataset:
                 data["type_ids"] = t.stack(type_ids, dim=1)
         return data
 
-    def generate_t5_annotation(self, data):
+    def generate_t5_annotation(self, data, quiet=False):
         # prevent any modification to data, also prevent checkpoint storing
         # data to gpu by moving
         data = copy.deepcopy(data)
+        result = self.annotator.annotate(
+            data["text_question"], data["choices"], quiet=quiet
+        )
+        if result is not None:
+            return result
         if self.matcher_mode == "embedding":
             if len(data["target"]) == 0:
                 raise ValueError(f"Target not set for data with id {data['id']}")
@@ -614,6 +623,8 @@ class ARCDataset:
         wnl = WordNetLemmatizer()
         for split_data in (self.train_data, self.validate_data, self.test_data):
             for data in split_data:
+                if data["id"].startswith("generated"):
+                    continue
                 if len(data["original_split"]) == 0:
                     continue
                 key = f"arc_{data['original_split']}_{data['original_index']}"
@@ -702,7 +713,7 @@ class ARCDataset:
                     allowed_tokens.append("")
 
                 preprocessed = {
-                    "text_question": entry["question"]["stem"].lower() + "?",
+                    "text_question": entry["question"]["stem"] + "?",
                     "text_choices": text_choices,
                     "target": allowed_tokens,
                     "facts": [entry["fact1"]],
@@ -737,6 +748,81 @@ class ARCDataset:
                 },
                 file,
             )
+
+    def add_kinematics_training_data(self):
+        generator = random.Random(42)
+        templates = [
+            "A {vehicle} takes {time} to travel from city A to city B "
+            "which are {distance} apart from each other. "
+            "What is the average speed of the {vehicle} during this time?",
+            "It takes {time} for a {vehicle} to travel {distance}. "
+            "Which best describes the average speed of the {vehicle}?",
+            "A passenger boarded a {vehicle} in city A and it takes {time} for her "
+            "to get to city B which is {distance} away from city A. "
+            "What is the average speed?",
+            "The fastest way to travel from city A to city B, where the distance in between "
+            "is {distance}, is taking a {vehicle}, and it takes {time} to complete the trip, "
+            "What is the average speed of the {vehicle}?",
+            "To travel from city A to city B, a {vehicle} takes {time} to cross {distance},"
+            "What was the average speed?",
+        ]
+        for i in range(100):
+            vehicle, time, distance = generator.choice(
+                [
+                    ("car", "1 h", "100 km"),
+                    ("car", "2 h", "258 km"),
+                    ("car", "7 h", "840 km"),
+                    ("car", "1.2 h", "144 km"),
+                    ("car", "1.5 h", "181 km"),
+                    ("car", "4 h", "470 km"),
+                    ("car", "5.2 h", "604 km"),
+                    ("car", "3.1 h", "393 km"),
+                    ("car", "7 h", "777 km"),
+                    ("bus", "3 h", "240 km"),
+                    ("bus", "2.4 h", "480 km"),
+                    ("bus", "6 h", "540 km"),
+                    ("bus", "5 h", "375 km"),
+                    ("bus", "2 h", "228 km"),
+                    ("bus", "6 h", "528 km"),
+                    ("bus", "5 h", "405 km"),
+                    ("plane", "2 h", "780 km"),
+                    ("plane", "4 h", "840 km"),
+                    ("plane", "3.2 h", "1280 km"),
+                    ("plane", "5.6 h", "1520 km"),
+                    ("plane", "1.2 h", "482 km"),
+                    ("plane", "6 h", "2059 km"),
+                ]
+            )
+            question = generator.choice(templates).format(
+                vehicle=vehicle, time=time, distance=distance
+            )
+            answer = float(distance.split(" ")[0]) / float(time.split(" ")[0])
+            choices = [
+                f"{answer:.2f} km/h",
+                f"{answer * 2:.2f} km/h",
+                f"{answer * 4:.2f} km/h",
+                f"{answer / 2:.2f} km/h",
+            ]
+            generator.shuffle(choices)
+            choices = choices + [""]
+            preprocessed = {
+                "text_question": question,
+                "text_choices": self.generate_choice_str(choices),
+                "target": ["speed"],
+                "facts": [],
+                "choices": choices,
+                "choice_labels": ["A", "B", "C", "D", ""],
+                "choice_mask": [0, 0, 0, 0, 1],
+                "choice_match_masks": self.generate_choice_match_mask(choices[:4])
+                + [""],
+                "id": "generated_{i}",
+                "original_split": "generated",
+                "original_index": i,
+            }
+            label = choices.index(f"{answer:.2f} km/h")
+            preprocessed["label"] = label
+            preprocessed["text_answer"] = choices[label]
+            self.train_data.append(preprocessed)
 
     def generate_choice_match_mask(self, choices: List[str]):
         valid_choice_num = sum(len(choice) > 0 for choice in choices)

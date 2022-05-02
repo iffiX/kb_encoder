@@ -3,12 +3,12 @@ reset
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib"
 
 export PROJECT="kb-encoder2"
-export ZONE=us-central1-a
+export ZONE="us-central1-a"
 export TPU="hanhanmumuqq"
 export TPU_SIZE="v3-8"
 export TPU_MODEL_PARALLELISM="8"
 export TASK="arc"
-export DATA_DIR="gs://kb-encoder/preprocess"
+export DATA_DIR="gs://kb-encoder/preprocess-2"
 export MODEL_DIR="gs://kb-encoder/${TASK}/"
 export PRETRAINED_DIR="gs://unifiedqa/models_v2/11B"
 export PRETRAINED_STEPS=1363200

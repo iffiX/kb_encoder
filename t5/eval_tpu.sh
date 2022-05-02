@@ -3,8 +3,8 @@ reset
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib"
 
 export PROJECT="kb-encoder2"
-export ZONE="us-central1-b"
-export TPU="hanhanmumuqq-2"
+export ZONE="us-central1-a"
+export TPU="hanhanmumuqq"
 export TPU_SIZE="v3-8"
 export TPU_MODEL_PARALLELISM="8"
 export TASK="arc"
