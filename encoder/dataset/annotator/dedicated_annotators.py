@@ -43,7 +43,7 @@ def annotate_astronomy_size_order(question, choices):
         else "smallest to largest"
     )
     return [
-        f"From {order} is {', '.join([entity[0] for entity in entities_with_size])}"
+        f"From {order} is {', '.join([entity[0] for entity in entities_with_size])}."
     ]
 
 
@@ -153,7 +153,7 @@ def annotate_chemistry_balance_equation(question, choices):
                 if molecule[0] is None:
                     equation[part][idx] = (int(choice), molecule[1], molecule[2])
         if check_chemical_equation_validity(equation):
-            result.append(f"Need {choice} molecules to balance the equation")
+            result.append(f"Need {choice} molecules to balance the equation.")
     return result
 
 
@@ -217,8 +217,41 @@ def annotate_chemistry_correct_molecule(question, choices):
     result = []
     for choice in choices:
         if check_chemical_molecule_validity(choice):
-            result.append(f"Formula {choice} is correct")
+            result.append(f"Formula {choice} is correct.")
     return result
+
+
+def is_chemistry_molecule_elements(question, choices):
+    return "how many elements" in question.lower()
+
+
+def annotate_chemistry_molecule_elements(question, choices):
+    tokens = question.split(" ")
+    result = []
+    for token in tokens:
+        if "(" in token:
+            token = token.strip("?").strip("!").strip(".")
+            formula = chemparse.parse_formula(token)
+            if token not in formula:
+                result.append(f"There are {len(formula)} elements in compound {token}.")
+    return result
+
+
+def is_chemistry_molecule_mass(question, choices):
+    question_query = nltk.sent_tokenize(question)[-1].lower()
+    return "mass of" in question_query and "molecule" in question_query
+
+
+def annotate_chemistry_molecule_mass(question, choices):
+    mass = {
+        "water": 18,
+        "oxygen": 32,
+        "nitrogen": 28,
+    }
+    question_query = nltk.sent_tokenize(question)[-1].lower()
+    molecule = re.search("a ([a-zA-Z]+) molecule", question_query).groups()[0]
+
+    return [f"The mass of the {molecule} molecule is {mass[molecule]}."]
 
 
 def is_biology_sex_cell_chromosome_number(question, _choices):
@@ -246,6 +279,8 @@ def can_dedicated_annotate(question, choices):
         or is_chemistry_equation_conservation_of_mass(question, choices)
         or is_chemistry_balance_equation(question, choices)
         or is_chemistry_correct_molecule(question, choices)
+        or is_chemistry_molecule_mass(question, choices)
+        or is_chemistry_molecule_elements(question, choices)
         or is_biology_sex_cell_chromosome_number(question, choices)
     )
 
@@ -259,6 +294,10 @@ def dedicated_annotate(question, choices):
         return annotate_chemistry_balance_equation(question, choices)
     elif is_chemistry_correct_molecule(question, choices):
         return annotate_chemistry_correct_molecule(question, choices)
+    elif is_chemistry_molecule_mass(question, choices):
+        return annotate_chemistry_molecule_mass(question, choices)
+    elif is_chemistry_molecule_elements(question, choices):
+        return annotate_chemistry_molecule_elements(question, choices)
     elif is_biology_sex_cell_chromosome_number(question, choices):
         return annotate_biology_sex_cell_chromosome_number(question, choices)
     else:

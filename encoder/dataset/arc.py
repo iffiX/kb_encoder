@@ -93,7 +93,9 @@ class ARCDataset:
                 self.validate_data = data["validate"]
                 self.test_data = data["test"]
         self.set_corpus()
-        self.add_kinematics_training_data()
+        self.add_kinematics_speed_training_data()
+        self.add_kinematics_time_training_data()
+        self.add_electric_training_data()
 
     @property
     def train_dataset(self):
@@ -749,7 +751,7 @@ class ARCDataset:
                 file,
             )
 
-    def add_kinematics_training_data(self):
+    def add_kinematics_speed_training_data(self):
         generator = random.Random(42)
         templates = [
             "A {vehicle} takes {time} to travel from city A to city B "
@@ -815,11 +817,150 @@ class ARCDataset:
                 "choice_mask": [0, 0, 0, 0, 1],
                 "choice_match_masks": self.generate_choice_match_mask(choices[:4])
                 + [""],
-                "id": "generated_{i}",
-                "original_split": "generated",
+                "id": "generated_speed_{i}",
+                "original_split": "generated_speed",
                 "original_index": i,
             }
             label = choices.index(f"{answer:.2f} km/h")
+            preprocessed["label"] = label
+            preprocessed["text_answer"] = choices[label]
+            self.train_data.append(preprocessed)
+
+    def add_kinematics_time_training_data(self):
+        generator = random.Random(42)
+        templates = [
+            "A {vehicle} travels from city A to city B at a speed of {speed}, "
+            "and city A is {distance} from B. "
+            "How long did it take the {vehicle} to complete the trip?",
+            "It is measured that a {vehicle} can travel at {speed}. "
+            "How much time does it take for a {vehicle} to travel {distance}?",
+            "A passenger boarded a {vehicle} in city A and travels at {speed} "
+            "to get to city B which is {distance} away from city A. "
+            "How long is the whole trip?",
+            "The fastest way to travel from city A to city B, where the distance in between "
+            "is {distance}, is taking a {vehicle} which travels at {speed}, "
+            "How much time does the trip take?",
+        ]
+        for i in range(20):
+            vehicle, speed, distance, correct_time, wrong_times = generator.choice(
+                [
+                    (
+                        "car",
+                        "100 km/h",
+                        "100 km",
+                        "1 hour",
+                        ("12 minutes", "30 minutes", "2 hours"),
+                    ),
+                    (
+                        "car",
+                        "130 km/h",
+                        "182 km",
+                        "1.4 hours",
+                        ("35 minutes", "1 hour", "3 hours"),
+                    ),
+                    (
+                        "car",
+                        "120 km/h",
+                        "840 km",
+                        "7 hours",
+                        ("3 hours", "6 hours", "9 hours"),
+                    ),
+                    (
+                        "car",
+                        "120 km/h",
+                        "144 km",
+                        "1.2 hours",
+                        ("40 minutes", "2 hours", "3 hours"),
+                    ),
+                    (
+                        "car",
+                        "60 km/h",
+                        "30 km",
+                        "30 minutes",
+                        ("20 minutes", "45 minutes", "1 hour"),
+                    ),
+                    (
+                        "bus",
+                        "80 km/h",
+                        "20 km",
+                        "15 minutes",
+                        ("6 minutes", "20 minutes", "40 minutes"),
+                    ),
+                    (
+                        "bus",
+                        "70 km/h",
+                        "35 km",
+                        "30 minutes",
+                        ("25 minutes", "40 minutes", "1 hour"),
+                    ),
+                    (
+                        "plane",
+                        "390 km/h",
+                        "780 km",
+                        "2 hours",
+                        ("1 hour", "2.5 hours", "3 hours"),
+                    ),
+                ]
+            )
+            question = generator.choice(templates).format(
+                vehicle=vehicle, speed=speed, distance=distance
+            )
+            choices = [correct_time] + list(wrong_times)
+            generator.shuffle(choices)
+            choices = choices + [""]
+            preprocessed = {
+                "text_question": question,
+                "text_choices": self.generate_choice_str(choices),
+                "target": ["time"],
+                "facts": [],
+                "choices": choices,
+                "choice_labels": ["A", "B", "C", "D", ""],
+                "choice_mask": [0, 0, 0, 0, 1],
+                "choice_match_masks": self.generate_choice_match_mask(choices[:4])
+                + [""],
+                "id": "generated_time_{i}",
+                "original_split": "generated_time",
+                "original_index": i,
+            }
+            label = choices.index(correct_time)
+            preprocessed["label"] = label
+            preprocessed["text_answer"] = choices[label]
+            self.train_data.append(preprocessed)
+
+    def add_electric_training_data(self):
+        generator = random.Random(42)
+        template = (
+            "When there is a current of {amp} amps and a total resistance of {ohm} ohms, "
+            "what's the voltage?"
+        )
+        for i, (amp, ohm, volt) in enumerate(
+            ((3, 10, 30), (2, 5, 10), (4, 9, 36), (8, 8, 64), (7, 8, 56))
+        ):
+
+            question = template.format(amp=amp, ohm=ohm)
+            choices = [
+                f"{volt:.2f} V",
+                f"{volt * 2:.2f} V",
+                f"{volt * 4:.2f} V",
+                f"{volt / 2:.2f} V",
+            ]
+            generator.shuffle(choices)
+            choices = choices + [""]
+            preprocessed = {
+                "text_question": question,
+                "text_choices": self.generate_choice_str(choices),
+                "target": ["time"],
+                "facts": [],
+                "choices": choices,
+                "choice_labels": ["A", "B", "C", "D", ""],
+                "choice_mask": [0, 0, 0, 0, 1],
+                "choice_match_masks": self.generate_choice_match_mask(choices[:4])
+                + [""],
+                "id": "generated_electric_{i}",
+                "original_split": "generated_electric",
+                "original_index": i,
+            }
+            label = choices.index(f"{volt:.2f} V")
             preprocessed["label"] = label
             preprocessed["text_answer"] = choices[label]
             self.train_data.append(preprocessed)

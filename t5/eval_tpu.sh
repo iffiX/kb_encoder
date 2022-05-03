@@ -36,7 +36,7 @@ t5_mesh_transformer  \
   --gin_param="MIXTURE_NAME = '${TASK}'" \
   --gin_param="tpu_mesh_shape.tpu_topology = '${TPU_SIZE}'" \
   --gin_param="tpu_mesh_shape.model_parallelism = ${TPU_MODEL_PARALLELISM}" \
-  --gin_param="utils.run.sequence_length = {'inputs': 512, 'targets': 16}" \
+  --gin_param="utils.run.sequence_length = {'inputs': 512, 'targets': 32}" \
   --gin_param="utils.run.batch_size=('tokens_per_batch', 16384)" \
   --gin_param="utils.run.eval_checkpoint_step=${EVAL_STEPS}" \
   --gin_param="utils.run.dataset_split = 'test'"

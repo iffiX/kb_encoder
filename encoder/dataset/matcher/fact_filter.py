@@ -84,6 +84,7 @@ class FactFilter:
         f = self.remove_non_alphanumerical_symbols_at_end(f)
         f = self.remove_escapes_and_consecutive_special_symbols(f)
         f = self.remove_questions(f)
+        f = self.remove_facts_with_choices(f)
         f = self.remove_short_or_high_non_word_ratio_facts(f)
         f = self.remove_incomplete_sentences(f)
         # f = self.remove_non_neutral_sentences(f)
@@ -200,6 +201,20 @@ class FactFilter:
             re.sub(r"[^a-zA-Z0-9.!\?\)\]\}]+$", "", fact) for fact in tqdm.tqdm(facts)
         ]
         return facts
+
+    def remove_facts_with_choices(self, facts):
+        logging.info("Running stage remove_facts_with_choices")
+        new_facts = []
+        for fact in tqdm.tqdm(facts):
+            if not (
+                re.search(f"a\. ", fact)
+                or re.search(f"b\. ", fact)
+                or re.search(f"c\. ", fact)
+                or re.search(f"d\. ", fact)
+                or re.search(f"e\. ", fact)
+            ):
+                new_facts.append(fact)
+        return new_facts
 
     def remove_short_or_high_non_word_ratio_facts(self, facts):
         logging.info("Running stage remove_short_or_high_non_word_ratio_facts")

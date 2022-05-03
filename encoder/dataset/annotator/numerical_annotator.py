@@ -417,6 +417,8 @@ class NumericalAnnotator:
         for choice in choices:
             choice_times.append(self.extract_time_length(choice)[0])
 
+        time_map = {"s": "seconds", "min": "minutes", "h": "hours", "d": "days"}
+
         def stopper(vars):
             for var in vars:
                 if var.tags["unit"][0] == "time":
@@ -436,11 +438,11 @@ class NumericalAnnotator:
                             )
                             if len(result) == 0:
                                 result.append(
-                                    f"Time is {new_time:g} {choice_time[1][1]}."
+                                    f"Travel time is {new_time:g} {time_map[choice_time[1][1]]}."
                                 )
                             else:
                                 result.append(
-                                    f"Time is also {new_time:g} {choice_time[1][1]}."
+                                    f"Travel time is also {new_time:g} {time_map[choice_time[1][1]]}."
                                 )
                     return result
 

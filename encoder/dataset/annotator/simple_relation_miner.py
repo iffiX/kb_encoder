@@ -21,7 +21,7 @@ def mine_numerical_relation(question, choices):
     if len(question_values) == 1:
         for ch, ch_val in zip(choices, choice_values):
             if question_values[0] == ch_val:
-                result = [f"{question_matches[0][0]} = {ch_val:.2g} in {ch}."]
+                result = [f"{question_matches[0][0]} = {ch_val:g} in {ch}."]
     else:
         result = []
         for arg0, arg1, operation in (
@@ -43,6 +43,6 @@ def mine_numerical_relation(question, choices):
             for ch, ch_val in zip(choices, choice_values):
                 if close_eq(value, ch_val):
                     result.append(
-                        f"{arg0:.2g} {operation} {arg1:.2g} = {ch_val:.2g} in {ch}."
+                        f"{arg0:g} {operation} {arg1:g} = {ch_val:g} in {ch}."
                     )
     return result

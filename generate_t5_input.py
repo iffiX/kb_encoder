@@ -29,9 +29,11 @@ if __name__ == "__main__":
     )
     # with open(os.path.join(preprocess_cache_dir, "arc_targets.json"), "r") as file:
     #     dataset.set_search_targets(json.load(file))
-    # for i in range(-100, 0, 1):
+    # pprint.pprint(dataset.generate_t5_annotation(dataset.test_data[233]))
+    # for i in range(-5, 0, 1):
     #     pprint.pprint(dataset.generate_t5_annotation(dataset.train_data[i]))
-    dataset.generate_all_t5_data()
+    dataset.generate_all_t5_data(split="train")
+    dataset.generate_all_t5_data(split="test")
 
 # if __name__ == "__main__":
 #     annotator = NumericalAnnotator()
