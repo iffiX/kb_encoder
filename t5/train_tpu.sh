@@ -12,7 +12,7 @@ export DATA_DIR="gs://kb-encoder/preprocess-2"
 export MODEL_DIR="gs://kb-encoder/${TASK}/"
 export PRETRAINED_DIR="gs://unifiedqa/models_v2/11B"
 export PRETRAINED_STEPS=1363200
-export FINETUNE_STEPS=15000
+export FINETUNE_STEPS=17000
 export PYTHONPATH=`pwd`
 
 eval "$(conda shell.bash hook)"

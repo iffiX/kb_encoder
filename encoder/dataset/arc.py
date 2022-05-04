@@ -275,6 +275,8 @@ class ARCDataset:
         )
         if result is not None:
             return result
+        if data["id"].startswith("openbook_qa"):
+            return f" \\n (facts) {', '.join(data['facts'])}"
         if self.matcher_mode == "embedding":
             if len(data["target"]) == 0:
                 raise ValueError(f"Target not set for data with id {data['id']}")
@@ -724,7 +726,7 @@ class ARCDataset:
                     "choice_mask": t.FloatTensor([[0, 0, 0, 0, 1]]),
                     "choice_match_masks": self.generate_choice_match_mask(choices[:4])
                     + [""],
-                    "id": entry["id"],
+                    "id": "openbook_qa_" + entry["id"],
                     "original_split": "",
                     "original_index": -1,
                 }
