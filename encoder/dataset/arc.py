@@ -61,6 +61,8 @@ class ARCDataset:
         self.matcher_seed = matcher_seed
         self.matcher_config = matcher_config
         self.match_closest_when_no_equal = match_closest_when_no_equal
+        if output_mode not in ("single", "splitted"):
+            raise ValueError(f"Invalid output_mode {output_mode}")
         self.output_mode = output_mode
 
         self.matcher = ARCMatcher(tokenizer=self.matcher_tokenizer)

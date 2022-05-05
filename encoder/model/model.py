@@ -342,7 +342,7 @@ class Model(nn.Module):
             return self.choice_predictors[dataset_name](hidden_state)
 
 
-class ModelForRetriever(nn.Module):
+class ModelForReranker(nn.Module):
     """
     BERT style classifier, with VAT (Virtual adversarial training)
 
@@ -360,7 +360,7 @@ class ModelForRetriever(nn.Module):
         adversarial_training_use_sift: bool = False,
         adversarial_training_config: dict = None,
     ):
-        super(ModelForRetriever, self).__init__()
+        super(ModelForReranker, self).__init__()
 
         self.base = AutoModelForSequenceClassification.from_pretrained(
             base_type,
@@ -369,6 +369,7 @@ class ModelForRetriever(nn.Module):
             mirror=huggingface_mirror,
             return_dict=True,
             local_files_only=local_files_only,
+            num_labels=1,
         )
         self.batch_size = batch_size
         self.adversarial_training = adversarial_training
@@ -526,7 +527,7 @@ class ModelForRetriever(nn.Module):
         return logits.view(token_type_ids.shape[0], token_type_ids.shape[1])
 
 
-class ModelForReranker(nn.Module):
+class ModelForRetriever(nn.Module):
     def __init__(
         self,
         base_type,
@@ -535,7 +536,7 @@ class ModelForReranker(nn.Module):
         adversarial_training_use_sift: bool = False,
         adversarial_training_config: dict = None,
     ):
-        super(ModelForReranker, self).__init__()
+        super(ModelForRetriever, self).__init__()
         self.base = AutoModel.from_pretrained(
             base_type,
             cache_dir=model_cache_dir,

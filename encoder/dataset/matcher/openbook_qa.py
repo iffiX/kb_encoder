@@ -3,7 +3,7 @@ import os
 import json
 import logging
 from transformers import PreTrainedTokenizerBase
-from encoder.dataset.download import ConceptNet, OpenBookQA
+from encoder.dataset.download import ConceptNetWithGloVe, OpenBookQA
 from encoder.dataset.matcher import ConceptNetReader, KnowledgeMatcher
 from encoder.dataset.matcher.base import BaseMatcher
 from encoder.utils.settings import preprocess_cache_dir
@@ -12,17 +12,21 @@ from encoder.utils.settings import preprocess_cache_dir
 class OpenBookQAMatcher(BaseMatcher):
     def __init__(self, tokenizer: PreTrainedTokenizerBase):
         archive_path = str(
-            os.path.join(preprocess_cache_dir, "conceptnet-archive.data")
+            os.path.join(preprocess_cache_dir, "conceptnet-archive-glove.data")
         )
-        self.concept_net = ConceptNet().require()
+        embedding_path = str(
+            os.path.join(preprocess_cache_dir, "conceptnet-embedding-glove.hdf5")
+        )
+        self.concept_net = ConceptNetWithGloVe().require()
         self.openbook_qa = OpenBookQA().require()
 
         if not os.path.exists(archive_path):
             logging.info("Processing concept net")
             reader = ConceptNetReader().read(
                 asserion_path=self.concept_net.assertion_path,
-                weight_path=self.concept_net.numberbatch_path,
-                weight_hdf5_path=self.concept_net.embedding_path,
+                weight_path=self.concept_net.glove_path,
+                weight_style="glove_42b_300d",
+                weight_hdf5_path=embedding_path,
                 simplify_with_int8=True,
             )
             reader.tokenized_nodes = tokenizer(

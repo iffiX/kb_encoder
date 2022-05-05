@@ -1,3 +1,5 @@
+import os
+import json
 import itertools
 import warnings
 import torch as t
@@ -22,6 +24,7 @@ from encoder.utils.config import OpenBookQATrainConfig, fix_missing
 from encoder.utils.settings import (
     proxies,
     model_cache_dir,
+    preprocess_cache_dir,
     huggingface_mirror,
     local_files_only,
 )
@@ -38,7 +41,6 @@ class OpenBookQATrainer(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         warnings.filterwarnings("ignore")
-
         fix_missing(config)
         self.config = config
         self.stage_result_path = stage_result_path
@@ -54,18 +56,13 @@ class OpenBookQATrainer(pl.LightningModule):
         self.dataset = OpenBookQADataset(
             tokenizer=self.tokenizer,
             max_seq_length=config.max_seq_length,
-            generate_length=config.generate_length,
             use_matcher=config.use_matcher,
             matcher_mode=config.matcher_mode,
             matcher_seed=config.seed,
             matcher_config=config.matcher_config,
-            include_option_label_in_sentence=config.include_option_label_in_sentence,
-            include_option_label_in_answer_and_choices=config.include_option_label_in_answer_and_choices,
-            use_option_label_as_answer_and_choices=config.use_option_label_as_answer_and_choices,
             match_closest_when_no_equal=config.match_closest_when_no_equal,
             output_mode="single" if "t5-" in self.config.base_type else "splitted",
         )
-
         if "t5-" in self.config.base_type:
             self.model = T5ForConditionalGeneration.from_pretrained(
                 config.base_type,
@@ -146,6 +143,7 @@ class OpenBookQATrainer(pl.LightningModule):
             self.model.parallelize(self.config.device_map)
         else:
             self._real_device = None
+        self.dataset.set_search_targets(self.load_targets())
 
     # noinspection PyTypeChecker
     def training_step(self, batch: BatchEncoding, batch_idx):
@@ -297,3 +295,9 @@ class OpenBookQATrainer(pl.LightningModule):
                 }
             ],
         )
+
+    def load_targets(self):
+        with open(
+            os.path.join(preprocess_cache_dir, "openbook_qa_targets.json"), "r"
+        ) as file:
+            return json.load(file)

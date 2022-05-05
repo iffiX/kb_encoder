@@ -1,0 +1,44 @@
+{
+    "configs": [
+        {
+            "epochs_per_retriever_self_learn": 5,
+            "epochs_per_reranker_self_learn": 10,
+            "retriever_accumulate_grad_batches": 4,
+            "retriever_base_type": "sentence-transformers/all-mpnet-base-v2",
+            "retriever_model_configs": {},
+            "retriever_negative_samples": 31,
+            "retriever_top_k": 30,
+            "retriever_batch_size": 8,
+            "retriever_l2_regularization": 0,
+            "retriever_learning_rate": 1e-5,
+            "retriever_scheduler_warmup_proportion": 0.1,
+            "retriever_max_seq_length": 100,
+            "retriever_optimizer_class": "AdamW",
+
+            "reranker_accumulate_grad_batches": 8,
+            "reranker_base_type": "microsoft/deberta-v3-large",
+            "reranker_model_configs": {},
+            "reranker_negative_samples": 31,
+            "reranker_batch_size": 1,
+            "reranker_l2_regularization": 0,
+            "reranker_learning_rate": 5e-6,
+            "reranker_scheduler_warmup_proportion": 0,
+            "reranker_max_seq_length": 200,
+            "reranker_optimizer_class": "AdamW",
+
+            "epochs": 15,
+            "load_worker_num": 4,
+            "load_prefetch_per_worker": 8,
+
+            "load": false,
+            "seed": 697474,
+            "save": true
+        }
+    ],
+    "early_stopping_patience": 100,
+    "gpus": [0],
+    "stages": [
+        "openbook_qa_search"
+    ],
+    "working_directory": "/home/muhan/data/workspace/kb_encoder/train_openbook_qa_search"
+}

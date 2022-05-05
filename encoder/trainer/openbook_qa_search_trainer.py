@@ -9,8 +9,8 @@ from torch.distributed import all_gather_object, get_world_size, get_rank
 from transformers import AutoTokenizer, BatchEncoding
 from encoder.model.model import ModelForRetriever, ModelForReranker
 from encoder.dataset.base import collate_function_dict_to_batch_encoding
-from encoder.dataset.arc_search import ARCSearchDataset
-from encoder.utils.config import ARCSearchTrainConfig, fix_missing
+from encoder.dataset.openbook_qa_search import OpenBookQASearchDataset
+from encoder.utils.config import OpenBookQASearchTrainConfig, fix_missing
 from encoder.utils.settings import (
     proxies,
     model_cache_dir,
@@ -25,10 +25,10 @@ from .utils import (
 )
 
 
-class ARCSearchTrainer(pl.LightningModule):
+class OpenBookQASearchTrainer(pl.LightningModule):
     def __init__(
         self,
-        config: ARCSearchTrainConfig,
+        config: OpenBookQASearchTrainConfig,
         stage_result_path="./",
         is_distributed=False,
     ):
@@ -56,7 +56,7 @@ class ARCSearchTrainer(pl.LightningModule):
             local_files_only=local_files_only,
         )
 
-        self.dataset = ARCSearchDataset(
+        self.dataset = OpenBookQASearchDataset(
             retriever_tokenizer=self.retriever_tokenizer,
             reranker_tokenizer=self.reranker_tokenizer,
             retriever_negative_samples=config.retriever_negative_samples,
@@ -143,14 +143,6 @@ class ARCSearchTrainer(pl.LightningModule):
             collate_fn=collate_function_dict_to_batch_encoding,
             worker_init_fn=set_worker_sharing_strategy,
         )
-        unannotated_train_loader = DataLoader(
-            dataset=self.dataset.unannotated_train_dataset,
-            num_workers=self.config.load_worker_num,
-            prefetch_factor=self.config.load_prefetch_per_worker,
-            batch_size=self.config.retriever_batch_size,
-            collate_fn=collate_function_dict_to_batch_encoding,
-            worker_init_fn=set_worker_sharing_strategy,
-        )
         search_loader = DataLoader(
             dataset=self.dataset.search_dataset,
             num_workers=self.config.load_worker_num,
@@ -163,7 +155,6 @@ class ARCSearchTrainer(pl.LightningModule):
             facts_loader,
             validate_loader,
             train_candidates_loader,
-            unannotated_train_loader,
             search_loader,
         ]
 
@@ -282,17 +273,7 @@ class ARCSearchTrainer(pl.LightningModule):
                     train_candidates_batch, train_candidates_top_k
                 )
 
-                annotate_batch, annotate_embeds = collate_and_filter_outputs(outputs[3])
-                annotate_top_k = t.topk(
-                    t.einsum(
-                        "an,fn->af",
-                        (annotate_embeds.squeeze(1), fact_embeds.squeeze(1)),
-                    ),
-                    k=k_num,
-                    dim=1,
-                ).indices
-
-                search_batch, search_embeds = collate_and_filter_outputs(outputs[4])
+                search_batch, search_embeds = collate_and_filter_outputs(outputs[3])
                 search_top_k = t.topk(
                     t.einsum(
                         "sn,fn->sf", (search_embeds.squeeze(1), fact_embeds.squeeze(1))
@@ -303,8 +284,6 @@ class ARCSearchTrainer(pl.LightningModule):
                 self.retriever_best_top_k = [
                     validate_batch,
                     validate_top_k.cpu(),
-                    annotate_batch,
-                    annotate_top_k.cpu(),
                     search_top_k.cpu(),
                 ]
         if self.trainer.stage_mode == "train" and not self.should_train_retriever():
@@ -318,45 +297,44 @@ class ARCSearchTrainer(pl.LightningModule):
             validate_choice = t.argmax(
                 self.reranker_model.predict(*validate_input), dim=1
             )
-            # validate_choice = t.topk(
-            #     self.reranker_model.predict(*validate_input), k=3, dim=1,
-            # ).indices
+            validate_choice_2 = t.topk(
+                self.reranker_model.predict(*validate_input), k=3, dim=1,
+            ).indices
+            validate_choice_3 = t.topk(
+                self.reranker_model.predict(*validate_input), k=5, dim=1,
+            ).indices
             metrics = self.dataset.validate_search(
                 self.retriever_best_top_k[0],
                 self.relative_top_k_to_absolute_fact_index(
                     self.retriever_best_top_k[1], validate_choice
                 ),
             )
-
+            metrics_2 = self.dataset.validate_search(
+                self.retriever_best_top_k[0],
+                self.relative_top_k_to_absolute_fact_index(
+                    self.retriever_best_top_k[1], validate_choice_2
+                ),
+            )
+            metrics_3 = self.dataset.validate_search(
+                self.retriever_best_top_k[0],
+                self.relative_top_k_to_absolute_fact_index(
+                    self.retriever_best_top_k[1], validate_choice_3
+                ),
+            )
             self.log(
                 "reranker_accuracy", metrics["accuracy"], prog_bar=True, sync_dist=True,
             )
             print("Validation result:")
             print(f"reranker_accuracy: {metrics['accuracy']}")
-
+            print(f"reranker_top_3_accuracy: {metrics_2['accuracy']}")
+            print(f"reranker_top_5_accuracy: {metrics_3['accuracy']}")
             if metrics["accuracy"] > self.reranker_best_accuracy:
                 self.reranker_best_accuracy = metrics["accuracy"]
                 if self.reranker_best_accuracy > 0:
-                    print("\nGenerating data for annotate top-k")
-                    annotate_input = self.move_reranker_input(
-                        self.dataset.generate_reranker_input(
-                            self.retriever_best_top_k[3], "unannotated_train"
-                        )
-                    )
-                    print("\nProcessing annotate top-k using reranker")
-                    annotate_score = self.reranker_model.predict(*annotate_input)
-                    annotate_choice = t.argmax(annotate_score, dim=1)
-                    annotate_confidence = (
-                        t.softmax(annotate_score, dim=1)[
-                            list(range(annotate_choice.shape[0])), annotate_choice
-                        ]
-                        > 0.5
-                    )
-
                     print("\nGenerating data for search top-k")
                     search_input = self.move_reranker_input(
                         self.dataset.generate_reranker_input(
-                            self.retriever_best_top_k[4], "search"
+                            self.retriever_best_top_k[2], "search"
                         )
                     )
                     print("\nProcessing search top-k using reranker")
@@ -366,8 +344,6 @@ class ARCSearchTrainer(pl.LightningModule):
 
                     self.reranker_current_search_best_accuracy = metrics["accuracy"]
                     self.reranker_best_choice = [
-                        annotate_choice.cpu(),
-                        annotate_confidence.cpu(),
                         search_candidates.cpu(),
                     ]
 
@@ -386,26 +362,13 @@ class ARCSearchTrainer(pl.LightningModule):
             try:
                 self.dataset.save_search_targets(
                     self.relative_top_k_to_absolute_fact_index(
-                        self.retriever_best_top_k[4], self.reranker_best_choice[2],
+                        self.retriever_best_top_k[2], self.reranker_best_choice[0],
                     )
                 )
             except ValueError:
                 print("\nSearch targets not saved, ignore this during sanity checking")
 
         if self.is_end_of_self_train_epoch():
-            if len(self.reranker_best_choice) > 0:
-                print(
-                    f"\nAnnotating train data, "
-                    f"best accuracy: {self.reranker_best_accuracy}"
-                )
-                self.dataset.annotate_train_data(
-                    self.retriever_best_top_k[2],
-                    self.relative_top_k_to_absolute_fact_index(
-                        self.retriever_best_top_k[3], self.reranker_best_choice[0]
-                    ),
-                    self.reranker_best_choice[1],
-                )
-
             self.retriever_best_accuracy = 0
             self.retriever_best_top_k = []
             self.reranker_best_accuracy = 0

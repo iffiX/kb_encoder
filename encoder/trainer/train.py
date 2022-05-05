@@ -6,7 +6,7 @@ from ..utils.config import *
 from .commonsense_qa_search_trainer import CommonsenseQASearchTrainer
 from .commonsense_qa_trainer import CommonsenseQATrainer
 from .openbook_qa_trainer import OpenBookQATrainer
-from .openbook_qa_fact_trainer import OpenBookQAFactTrainer
+from .openbook_qa_search_trainer import OpenBookQASearchTrainer
 from .arc_trainer import ARCTrainer
 from .arc_search_trainer import ARCSearchTrainer
 from .ensemble_trainer import EnsembleTrainer
@@ -19,7 +19,7 @@ stage_name_to_trainer_map = {
     "commonsense_qa": CommonsenseQATrainer,
     "commonsense_qa_search": CommonsenseQASearchTrainer,
     "openbook_qa": OpenBookQATrainer,
-    "openbook_qa_fact": OpenBookQAFactTrainer,
+    "openbook_qa_search": OpenBookQASearchTrainer,
     "arc": ARCTrainer,
     "arc_search": ARCSearchTrainer,
     "ensemble": EnsembleTrainer,
@@ -153,7 +153,7 @@ def _train(
         callbacks=[checkpoint_callback, early_stopping],
         logger=[t_logger],
         reload_dataloaders_every_epoch=True
-        if isinstance(stage_trainer, ARCSearchTrainer)
+        if isinstance(stage_trainer, (ARCSearchTrainer, OpenBookQASearchTrainer))
         else False,
         limit_train_batches=getattr(stage_config, "train_steps", None) or 1.0,
         limit_val_batches=getattr(stage_config, "validate_steps", None) or 1.0,
@@ -164,7 +164,7 @@ def _train(
         # val_check_interval=stage_config.train_steps,
         accumulate_grad_batches=getattr(stage_config, "accumulate_grad_batches", 1),
         resume_from_checkpoint=checkpoint,
-        deterministic=True,
+        # deterministic=True,
         precision=config.precision,
     )
     trainer.stage_mode = "train"

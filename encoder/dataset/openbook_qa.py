@@ -2,14 +2,16 @@ import os
 import re
 import copy
 import json
+import tqdm
 import pickle
+import random
 import difflib
 import logging
 import nltk
+import multiprocessing
 import numpy as np
 import torch as t
-import random
-from typing import List
+from typing import List, Dict
 from nltk.stem import WordNetLemmatizer
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, BatchEncoding
 from encoder.dataset.download import OpenBookQA
@@ -22,9 +24,12 @@ from encoder.utils.settings import (
     local_files_only,
 )
 from encoder.utils.file import open_file_with_create_directories
-from encoder.utils.inspect import save_inspect_data
 from .utils import num2word
 from .base import StaticIterableDataset
+
+
+class OpenBookQADatasetParallelContext:
+    dataset: "OpenBookQADataset" = None
 
 
 class OpenBookQADataset:
@@ -32,17 +37,11 @@ class OpenBookQADataset:
         self,
         tokenizer: PreTrainedTokenizerBase,
         max_seq_length: int = 300,
-        generate_length: int = 32,
         use_matcher: bool = False,
         matcher_mode: str = "embedding",
         matcher_seed: int = -1,
         matcher_config: dict = None,
-        include_option_label_in_sentence: bool = False,
-        include_option_label_in_answer_and_choices: bool = False,
-        use_option_label_as_answer_and_choices: bool = False,
-        insert_answers_at_end: bool = False,
         match_closest_when_no_equal: bool = True,
-        regenerate: bool = True,
         output_mode: str = "single",
     ):
         self.tokenizer = tokenizer
@@ -55,56 +54,29 @@ class OpenBookQADataset:
             local_files_only=local_files_only,
         )
         self.max_seq_length = max_seq_length
-        self.generate_length = generate_length
         self.use_matcher = use_matcher
         self.matcher_mode = matcher_mode
         self.matcher_seed = matcher_seed
         self.matcher_config = matcher_config
-        self.include_option_label_in_sentence = include_option_label_in_sentence
-        self.include_option_label_in_answer_and_choices = (
-            include_option_label_in_answer_and_choices
-        )
-        self.insert_answers_at_end = insert_answers_at_end
-        self.use_option_label_as_answer_and_choices = (
-            use_option_label_as_answer_and_choices
-        )
         self.match_closest_when_no_equal = match_closest_when_no_equal
-        self.regenerate = regenerate
-
         if output_mode not in ("single", "splitted"):
             raise ValueError(f"Invalid output_mode {output_mode}")
         self.output_mode = output_mode
+
         self.matcher = OpenBookQAMatcher(tokenizer=self.matcher_tokenizer)
         self.openbook_qa = OpenBookQA().require()
 
         archive_path = os.path.join(preprocess_cache_dir, "openbook_qa.data")
         if not os.path.exists(archive_path):
-            self.train_data = self.parse_data(self.openbook_qa.train_path)
-            self.validate_data = self.parse_data(self.openbook_qa.validate_path)
-            self.test_data = self.parse_data(self.openbook_qa.test_path)
+            self.train_data = self.parse_data(self.openbook_qa.train_path, "train")
+            self.validate_data = self.parse_data(
+                self.openbook_qa.validate_path, "validate"
+            )
+            self.test_data = self.parse_data(self.openbook_qa.test_path, "test")
             self.save(archive_path)
         else:
             with open_file_with_create_directories(archive_path, "rb") as file:
                 data = pickle.load(file)
-            if (
-                data["include_option_label_in_answer_and_choices"]
-                != self.include_option_label_in_answer_and_choices
-                or data["include_option_label_in_sentence"]
-                != self.include_option_label_in_sentence
-                or data["use_option_label_as_answer_and_choices"]
-                != self.use_option_label_as_answer_and_choices
-            ):
-                if regenerate:
-                    logging.info(
-                        "Configuration mismatch, regenerating OpenBook QA dataset."
-                    )
-                    self.train_data = self.parse_data(self.openbook_qa.train_path)
-                    self.validate_data = self.parse_data(self.openbook_qa.validate_path)
-                    self.test_data = self.parse_data(self.openbook_qa.test_path)
-                    self.save(archive_path)
-                else:
-                    raise ValueError("Configuration mismatch")
-            else:
                 self.train_data = data["train"]
                 self.validate_data = data["validate"]
                 self.test_data = data["test"]
@@ -112,14 +84,12 @@ class OpenBookQADataset:
         self.original_train_data = copy.deepcopy(self.train_data)
         self.original_validate_data = copy.deepcopy(self.validate_data)
         self.original_test_data = copy.deepcopy(self.test_data)
+        self.set_corpus()
 
         if output_mode == "splitted":
             self.normalize_training_data()
 
-        if use_matcher:
-            self.add_associated_fact_training_data()
-        self.add_arithmetic_training_data()
-        self.set_corpus()
+        # self.add_arithmetic_training_data()
 
     @property
     def train_dataset(self):
@@ -144,120 +114,14 @@ class OpenBookQADataset:
             data = self.test_data[index]
         if self.output_mode == "single":
             if self.use_matcher:
-                # prevent any modification to data, also prevent checkpoint storing
-                # data to gpu by moving
-                data = copy.deepcopy(data)
-                if self.matcher_mode == "embedding":
-                    wnl = WordNetLemmatizer()
-
-                    if len(data["target"]) > 0:
-                        # For supporting manually setting search targets
-                        allowed_tokens = data["target"]
-                    else:
-                        tokens = nltk.word_tokenize(data["fact"])
-                        allowed_tokens = []
-                        tagged = nltk.pos_tag(tokens)
-                        for token, pos in tagged:
-                            if (
-                                pos.startswith("NN")
-                                # or pos.startswith("JJ")
-                                # or (
-                                #     pos.startswith("VB")
-                                #     and token not in self.matcher.VERB_FILTER_SET
-                                # )
-                            ):
-                                allowed_tokens.append(wnl.lemmatize(token))
-                        if len(allowed_tokens) < 3:
-                            for token, pos in tagged:
-                                if pos.startswith("JJ"):
-                                    allowed_tokens.append(wnl.lemmatize(token))
-
-                    # target = (
-                    #     " ".join(sorted(list(set(allowed_tokens))))
-                    #     + " "
-                    #     + data["text_question"]
-                    # )
-
-                    target = " @ ".join(sorted(list(set(allowed_tokens))))
-                    target_mask = []
-                    for c in target:
-                        if c == "@":
-                            target_mask.append("-")
-                        else:
-                            target_mask.append("+")
-                    target_mask = "".join(target_mask)
-
-                    match = self.matcher.match_by_node_embedding(
-                        data["text_question"],
-                        target_sentence=target,
-                        target_mask=target_mask,
-                        seed=self.matcher_seed,
-                        max_times=self.matcher_config["question_match_max_times"],
-                        max_depth=self.matcher_config["question_match_max_depth"],
-                        edge_top_k=self.matcher_config["question_match_edge_top_k"],
-                        source_context_range=self.matcher_config[
-                            "question_match_source_context_range"
-                        ],
-                    )
-                    selection = self.matcher.select_paths(
-                        match,
-                        max_edges=self.matcher_config["question_select_max_edges"],
-                        discard_edges_if_rank_below=self.matcher_config[
-                            "question_select_discard_edges_if_rank_below"
-                        ],
-                    )
-
-                    new_question = self.matcher.insert_selection(
-                        data["text_question"], selection, insert_at_end=True,
-                    )
-
-                    choice_mask = "+" * len(data["text_choices"])
-                    for choice in ("[A]", "[B]", "[C]", "[D]"):
-                        start_pos = data["text_choices"].find(choice)
-                        if start_pos != -1:
-                            choice_mask = (
-                                choice_mask[:start_pos]
-                                + "-" * len(choice)
-                                + choice_mask[start_pos + len(choice) :]
-                            )
-
-                    match = self.matcher.match_by_node_embedding(
-                        data["text_choices"],
-                        target_sentence=target,
-                        target_mask=target_mask,
-                        source_mask=choice_mask,
-                        seed=self.matcher_seed,
-                        max_times=self.matcher_config["choices_match_max_times"],
-                        max_depth=self.matcher_config["choices_match_max_depth"],
-                        edge_top_k=self.matcher_config["choices_match_edge_top_k"],
-                        source_context_range=self.matcher_config[
-                            "choices_match_source_context_range"
-                        ],
-                    )
-                    selection = self.matcher.select_paths(
-                        match,
-                        max_edges=self.matcher_config["choices_select_max_edges"],
-                        discard_edges_if_rank_below=self.matcher_config[
-                            "choices_select_discard_edges_if_rank_below"
-                        ],
-                    )
-
-                    new_choices = self.matcher.insert_selection(
-                        data["text_choices"], selection,
-                    )
-                    for choice in ("a", "b", "c", "d"):
-                        new_choices = new_choices.replace(
-                            f"[ {choice} ]", f"[{choice.upper()}]"
-                        )
-                elif self.matcher_mode == "none":
-                    new_question = data["text_question"]
-                    new_choices = data["text_choices"]
-                else:
-                    raise ValueError(f"Invalid match mode {self.matcher_mode}")
-
+                annotation = self.generate_t5_annotation(data, quiet=True)
                 encoded_sentence = self.tokenizer(
-                    new_question,
-                    new_choices,
+                    self.normalize_t5_input(
+                        data["text_question"]
+                        + " \\n "
+                        + data["text_choices"].replace("\n", " ")
+                        + annotation
+                    ),
                     padding="max_length",
                     max_length=self.max_seq_length,
                     truncation=True,
@@ -267,8 +131,11 @@ class OpenBookQADataset:
                 data["mask"] = encoded_sentence.attention_mask
             else:
                 encoded_sentence = self.tokenizer(
-                    data["text_question"],
-                    data["text_choices"],
+                    self.normalize_t5_input(
+                        data["text_question"]
+                        + " \\n "
+                        + data["text_choices"].replace("\n", " ")
+                    ),
                     padding="max_length",
                     max_length=self.max_seq_length,
                     truncation=True,
@@ -277,9 +144,9 @@ class OpenBookQADataset:
                 data["sentence"] = encoded_sentence.input_ids
                 data["mask"] = encoded_sentence.attention_mask
             answer = self.tokenizer.encode(
-                data["text_answer"],
+                self.normalize_t5_input(data["text_answer"]),
                 padding="max_length",
-                max_length=self.generate_length,
+                max_length=16,
                 truncation=True,
                 return_tensors="pt",
             )
@@ -293,38 +160,7 @@ class OpenBookQADataset:
                 # data to gpu by moving
                 data = copy.deepcopy(data)
                 if self.matcher_mode == "embedding":
-                    wnl = WordNetLemmatizer()
-
-                    if len(data["target"]) > 0:
-                        # For supporting manually setting search targets
-                        allowed_tokens = data["target"]
-                    else:
-                        tokens = nltk.word_tokenize(data["fact"])
-                        allowed_tokens = []
-                        tagged = nltk.pos_tag(tokens)
-                        for token, pos in tagged:
-                            if (
-                                pos.startswith("NN")
-                                # or pos.startswith("JJ")
-                                # or (
-                                #     pos.startswith("VB")
-                                #     and token not in self.matcher.VERB_FILTER_SET
-                                # )
-                            ):
-                                allowed_tokens.append(wnl.lemmatize(token))
-
-                        if len(allowed_tokens) < 3:
-                            for token, pos in tagged:
-                                if pos.startswith("JJ"):
-                                    allowed_tokens.append(wnl.lemmatize(token))
-
-                    # target = (
-                    #     " ".join(sorted(list(set(allowed_tokens))))
-                    #     + " "
-                    #     + data["text_question"]
-                    # )
-
-                    target = " @ ".join(sorted(list(set(allowed_tokens))))
+                    target = " @ ".join(sorted(list(set(data["target"]))))
                     target_mask = []
                     for c in target:
                         if c == "@":
@@ -333,38 +169,43 @@ class OpenBookQADataset:
                             target_mask.append("+")
                     target_mask = "".join(target_mask)
 
-                    if "exact_fact" not in data["id"]:
-                        match = self.matcher.match_by_node_embedding(
-                            data["text_question"],
-                            target_sentence=target,
-                            target_mask=target_mask,
-                            seed=self.matcher_seed,
-                            max_times=self.matcher_config["question_match_max_times"],
-                            max_depth=self.matcher_config["question_match_max_depth"],
-                            edge_top_k=self.matcher_config["question_match_edge_top_k"],
-                            source_context_range=self.matcher_config[
-                                "question_match_source_context_range"
-                            ],
-                        )
-                        selection = self.matcher.select_paths(
-                            match,
-                            max_edges=self.matcher_config["question_select_max_edges"],
-                            discard_edges_if_rank_below=self.matcher_config[
-                                "question_select_discard_edges_if_rank_below"
-                            ],
-                        )
+                    # match = self.matcher.match_by_node_embedding(
+                    #     data["text_question"],
+                    #     target_sentence=target,
+                    #     target_mask=target_mask,
+                    #     seed=self.matcher_seed,
+                    #     max_times=self.matcher_config["question_match_max_times"],
+                    #     max_depth=self.matcher_config["question_match_max_depth"],
+                    #     edge_top_k=self.matcher_config["question_match_edge_top_k"],
+                    #     source_context_range=self.matcher_config[
+                    #         "question_match_source_context_range"
+                    #     ],
+                    # )
+                    # selection = self.matcher.select_paths(
+                    #     match,
+                    #     max_edges=self.matcher_config["question_select_max_edges"],
+                    #     discard_edges_if_rank_below=self.matcher_config[
+                    #         "question_select_discard_edges_if_rank_below"
+                    #     ],
+                    # )
+                    # new_question = (
+                    #     self.matcher.insert_selection_at_end_preserve_case(
+                    #         data["text_question"], selection
+                    #     )
+                    #     + " (facts) "
+                    #     + ", ".join(data["facts"])
+                    # )
 
-                        new_question = self.matcher.insert_selection(
-                            data["text_question"], selection, insert_at_end=True,
-                        )
-                    else:
-                        new_question = data["text_question"] + f" ({data['fact']}) "
-
+                    new_questions = []
                     new_choices = []
-                    for choice in data["choices"]:
+                    for choice, match_mask in zip(
+                        data["choices"],
+                        self.generate_choice_match_mask(data["choices"]),
+                    ):
                         match = self.matcher.match_by_node_embedding(
                             choice,
                             target_sentence=target,
+                            source_mask=match_mask,
                             target_mask=target_mask,
                             seed=self.matcher_seed,
                             max_times=self.matcher_config["choices_match_max_times"],
@@ -382,19 +223,30 @@ class OpenBookQADataset:
                             ],
                         )
 
-                        new_choices.append(
-                            self.matcher.insert_selection(choice, selection,)
+                        # new_choices.append(
+                        #     self.matcher.insert_selection_at_end_preserve_case(
+                        #         data["text_question"] + " " + choice, selection,
+                        #     )
+                        # )
+                        new_choices.append(data["text_question"] + " " + choice)
+                        new_questions.append(
+                            self.matcher.insert_selection_at_end_preserve_case(
+                                ", ".join(data["facts"]), selection, begin="", end=""
+                            )
                         )
+                    # new_questions = [", ".join(data["facts"])] * len(data["choices"])
                 elif self.matcher_mode == "none":
-                    new_question = data["text_question"]
-                    new_choices = data["choices"]
+                    new_questions = [", ".join(data["facts"])] * len(data["choices"])
+                    new_choices = [
+                        data["text_question"] + " " + ch for ch in data["choices"]
+                    ]
                 else:
                     raise ValueError(f"Invalid match mode {self.matcher_mode}")
 
                 sentences, masks, type_ids = [], [], []
-                for choice in new_choices:
+                for question, choice in zip(new_questions, new_choices):
                     encoded_sentence = self.tokenizer(
-                        new_question,
+                        question,
                         choice,
                         padding="max_length",
                         max_length=self.max_seq_length,
@@ -425,6 +277,201 @@ class OpenBookQADataset:
                 data["mask"] = t.stack(masks, dim=1)
                 data["type_ids"] = t.stack(type_ids, dim=1)
         return data
+
+    def generate_t5_annotation(self, data, quiet=False):
+        # prevent any modification to data, also prevent checkpoint storing
+        # data to gpu by moving
+        data = copy.deepcopy(data)
+        # result = self.annotator.annotate(
+        #     data["text_question"], data["choices"], quiet=quiet
+        # )
+        # if result is not None:
+        #     return result
+        if self.matcher_mode == "embedding":
+            if len(data["target"]) == 0:
+                raise ValueError(f"Target not set for data with id {data['id']}")
+            target = " @ ".join(sorted(list(set(data["target"]))))
+            target_mask = []
+            for c in target:
+                if c == "@":
+                    target_mask.append("-")
+                else:
+                    target_mask.append("+")
+            target_mask = "".join(target_mask)
+
+            fact_annotation = f"(facts) {', '.join(data['facts'])}"
+
+            match = self.matcher.match_by_node_embedding(
+                data["text_question"],
+                target_sentence=target,
+                target_mask=target_mask,
+                seed=self.matcher_seed,
+                max_times=self.matcher_config["question_match_max_times"],
+                max_depth=self.matcher_config["question_match_max_depth"],
+                edge_top_k=self.matcher_config["question_match_edge_top_k"],
+                source_context_range=self.matcher_config[
+                    "question_match_source_context_range"
+                ],
+                source_context_weight=1,
+            )
+            selection = self.matcher.select_paths(
+                match,
+                max_edges=self.matcher_config["question_select_max_edges"],
+                discard_edges_if_rank_below=self.matcher_config[
+                    "question_select_discard_edges_if_rank_below"
+                ],
+            )
+
+            question_annotation = self.matcher.insert_selection_at_end_preserve_case(
+                "(question) ", selection, begin="", end="",
+            )
+
+            choice_annotations = []
+            for label, choice, match_mask in zip(
+                self.generate_labels(),
+                data["choices"],
+                # self.generate_choice_match_mask(data["choices"])
+                data["choice_match_masks"],
+            ):
+                if len(choice) > 0:
+                    match = self.matcher.match_by_node_embedding(
+                        choice,
+                        target_sentence=target,
+                        source_mask=match_mask,
+                        target_mask=target_mask,
+                        seed=self.matcher_seed,
+                        max_times=self.matcher_config["choices_match_max_times"],
+                        max_depth=self.matcher_config["choices_match_max_depth"],
+                        edge_top_k=self.matcher_config["choices_match_edge_top_k"],
+                        source_context_range=self.matcher_config[
+                            "choices_match_source_context_range"
+                        ],
+                        source_context_weight=1,
+                    )
+                    selection = self.matcher.select_paths(
+                        match,
+                        max_edges=self.matcher_config["choices_select_max_edges"],
+                        discard_edges_if_rank_below=self.matcher_config[
+                            "choices_select_discard_edges_if_rank_below"
+                        ],
+                    )
+
+                    choice_annotations.append(
+                        self.matcher.insert_selection_at_end_preserve_case(
+                            f"({choice}) ", selection, begin="", end=""
+                        )
+                    )
+            annotation = (
+                fact_annotation
+                + " "
+                + question_annotation
+                + " "
+                + " ".join(choice_annotations)
+            )
+        elif self.matcher_mode == "none":
+            annotation = ""
+        else:
+            raise ValueError(f"Invalid match mode {self.matcher_mode}")
+
+        annotation = " \\n " + annotation if len(annotation) > 0 else annotation
+        return annotation
+
+    def generate_all_t5_data(self, split=None):
+        train_data, val_data, test_data, val_original_data, test_original_data = (
+            [],
+            [],
+            [],
+            [],
+            [],
+        )
+        with multiprocessing.Pool(
+            initializer=self.initialize_pool,
+            initargs=(self.matcher_mode, self.matcher_seed, self.matcher_config),
+        ) as pool:
+            for process_split, path, target, source in (
+                ("train", "openbook_qa_train_for_t5.json", train_data, self.train_data),
+                (
+                    "validate",
+                    "openbook_qa_validate_for_t5.json",
+                    val_data,
+                    self.validate_data,
+                ),
+                ("test", "openbook_qa_test_for_t5.json", test_data, self.test_data),
+                (
+                    "validate_original",
+                    "openbook_qa_validate_original_for_t5.json",
+                    val_original_data,
+                    self.validate_data,
+                ),
+                (
+                    "test_original",
+                    "openbook_qa_test_original_for_t5.json",
+                    test_original_data,
+                    self.test_data,
+                ),
+            ):
+                if split is not None:
+                    if (isinstance(split, str) and process_split != split) or (
+                        isinstance(split, list) and process_split not in split
+                    ):
+                        continue
+                print(f"Processing {process_split}")
+                with tqdm.tqdm(total=len(source)) as pbar:
+                    for result in pool.imap_unordered(
+                        self.generate_t5_input,
+                        [(process_split, i) for i in range(len(source))],
+                    ):
+                        pbar.update()
+                        target.append(result)
+
+                with open(os.path.join(preprocess_cache_dir, path), "w") as file:
+                    json.dump(target, file, indent=2)
+
+    @staticmethod
+    def initialize_pool(matcher_mode, matcher_seed, matcher_config):
+        OpenBookQADatasetParallelContext.dataset = OpenBookQADataset(
+            None,
+            matcher_mode=matcher_mode,
+            matcher_seed=matcher_seed,
+            matcher_config=matcher_config,
+        )
+        with open(
+            os.path.join(preprocess_cache_dir, "openbook_qa_targets.json"), "r"
+        ) as file:
+            OpenBookQADatasetParallelContext.dataset.set_search_targets(json.load(file))
+
+    @staticmethod
+    def generate_t5_input(args):
+        split, index = args
+        if split == "train":
+            data = OpenBookQADatasetParallelContext.dataset.train_data[index]
+        elif split in ("validate", "validate_original"):
+            data = OpenBookQADatasetParallelContext.dataset.validate_data[index]
+        else:
+            data = OpenBookQADatasetParallelContext.dataset.test_data[index]
+        annotation = ""
+        if "original" not in split:
+            annotation = OpenBookQADatasetParallelContext.dataset.generate_t5_annotation(
+                data
+            )
+        return {
+            "inputs": OpenBookQADataset.normalize_t5_input(
+                data["text_question"]
+                + " \\n "
+                + data["text_choices"].replace("\n", " ")
+                + annotation
+            ),
+            "targets": OpenBookQADataset.normalize_t5_input(data["text_answer"]),
+            "choices": data["choices"],
+            "label": data["label"],
+            "id": data["id"],
+        }
+
+    @staticmethod
+    def normalize_t5_input(text):
+        text = text.lower()
+        text = re.sub(r"'(.*)'", r"\1", text)
+        return text
 
     def validate_logits(self, batch: BatchEncoding, logits: t.Tensor):
         """
@@ -520,7 +567,6 @@ class OpenBookQADataset:
         if self.match_closest_when_no_equal:
             print(f"Approximately correct ratio {float(approximately_correct) / total}")
 
-        save_inspect_data(answers, "openbook_qa_val_answers")
         return {"accuracy": float(correct) / total}
 
     def generate_test_result_logits(self, logits: t.Tensor, directory: str):
@@ -596,11 +642,30 @@ class OpenBookQADataset:
         print("Corpus loaded, begin setting")
         self.matcher.matcher.set_corpus(corpus)
 
-    def parse_data(self, path):
+    def set_search_targets(self, search_target: Dict[str, List[str]]):
+        for split_data in (self.validate_data, self.test_data):
+            for data in split_data:
+                if data["id"].startswith("generated"):
+                    continue
+                if len(data["original_split"]) == 0:
+                    continue
+                key = f"openbook_qa_{data['original_split']}_{data['original_index']}"
+                if key not in search_target:
+                    raise ValueError(f"Entry {key} not found in search data")
+
+                allowed_tokens = []
+                # currently use top 1 as search target, can be set to more
+                for sentence in search_target[key][:1]:
+                    allowed_tokens += self.extract_targets(sentence)
+
+                data["target"] = allowed_tokens if len(allowed_tokens) > 0 else [""]
+                data["facts"] = search_target[key]
+
+    def parse_data(self, path, original_split):
         data = []
         logging.info(f"Parsing {path}")
         with open_file_with_create_directories(path, "r") as file:
-            for line in file:
+            for idx, line in enumerate(file):
                 entry = json.loads(line)
                 text_choices = self.generate_choice_str(
                     [ch["text"] for ch in entry["question"]["choices"]]
@@ -614,10 +679,15 @@ class OpenBookQADataset:
                 preprocessed = {
                     "text_question": entry["question"]["stem"].lower() + "?",
                     "text_choices": text_choices,
-                    "fact": entry["fact1"],
-                    "target": [],
+                    "target": self.extract_targets(entry["fact1"])
+                    if original_split == "train"
+                    else [],
+                    "facts": [entry["fact1"]] if original_split == "train" else [],
                     "choices": choices,
+                    "choice_match_masks": self.generate_choice_match_mask(choices),
                     "id": entry["id"],
+                    "original_split": original_split,
+                    "original_index": idx,
                 }
                 if "answerKey" in entry:
                     # For BERT, ALBERT, ROBERTA, use label instead, which is an integer
@@ -627,11 +697,20 @@ class OpenBookQADataset:
                         if ch["label"] == entry["answerKey"]
                     ][0]
                     preprocessed["label"] = label
-                    preprocessed["text_answer"] = self.generate_text_answer(
-                        label, choices[label]
-                    )
+                    preprocessed["text_answer"] = choices[label]
+
                 data.append(preprocessed)
         return data
+
+    def extract_targets(self, sentence):
+        wnl = WordNetLemmatizer()
+        tokens = nltk.word_tokenize(sentence)
+        tagged = nltk.pos_tag(tokens)
+        allowed_tokens = []
+        for token, pos in tagged:
+            if pos.startswith("NN"):
+                allowed_tokens.append(wnl.lemmatize(token.lower()))
+        return allowed_tokens
 
     def save(self, archive_path):
         with open_file_with_create_directories(archive_path, "wb") as file:
@@ -640,18 +719,9 @@ class OpenBookQADataset:
                     "train": self.train_data,
                     "validate": self.validate_data,
                     "test": self.test_data,
-                    "include_option_label_in_sentence": self.include_option_label_in_sentence,
-                    "include_option_label_in_answer_and_choices": self.include_option_label_in_answer_and_choices,
-                    "use_option_label_as_answer_and_choices": self.use_option_label_as_answer_and_choices,
                 },
                 file,
             )
-
-    def add_associated_fact_training_data(self):
-        new_train_data = copy.deepcopy(self.train_data)
-        for td in new_train_data:
-            td["id"] += "_exact_fact"
-        self.train_data = self.train_data + new_train_data
 
     def add_arithmetic_training_data(self):
         generator = random.Random(42)
@@ -704,7 +774,7 @@ class OpenBookQADataset:
                 "choices": choices,
                 "id": f"gen-ar-time-{i}",
                 "label": 0,
-                "text_answer": self.generate_text_answer(0, choices[0]),
+                "text_answer": choices[0],
             }
             self.train_data.append(sample)
         logging.info("Added 100 samples of time arithmetic")
@@ -768,7 +838,7 @@ class OpenBookQADataset:
                 "choices": choices,
                 "id": f"gen-ar-timeconv-{i}",
                 "label": 0,
-                "text_answer": self.generate_text_answer(0, choices[0]),
+                "text_answer": choices[0],
             }
             self.train_data.append(sample)
         logging.info("Added 100 samples of time conversion")
@@ -854,22 +924,57 @@ class OpenBookQADataset:
                 labels.append(np.argmax(lo))
         return np.array(labels)
 
-    def generate_choice_str(self, choices: List[str]):
-        if self.include_option_label_in_sentence:
-            result = ""
-            options = ["[A]", "[B]", "[C]", "[D]"]
-            for option, choice in zip(options, choices):
-                result += option + " " + choice + " "
-            return result
-        else:
-            return ", ".join(choices)
+    def generate_choice_match_mask(self, choices: List[str]):
+        valid_choice_num = sum(len(choice) > 0 for choice in choices)
+        wnl = WordNetLemmatizer()
+        choices_tokens = [nltk.word_tokenize(choice) for choice in choices]
+        choices_lemma_tokens = [
+            [wnl.lemmatize(token.lower()) for token in tokens]
+            for tokens in choices_tokens
+        ]
+        choices_lemma_tokens_set = [
+            set(lemma_tokens) for lemma_tokens in choices_lemma_tokens
+        ]
+        choices_token_is_common = [[] for _ in range(len(choices))]
+        # find common tokens
+        for choice_idx, (lemma_tokens, common_list) in enumerate(
+            zip(choices_lemma_tokens, choices_token_is_common)
+        ):
+            for token in lemma_tokens:
+                if sum(
+                    token in other_lemma_tokens_set
+                    for other_lemma_tokens_set in choices_lemma_tokens_set
+                ) == valid_choice_num or any(
+                    token in other_lemma_tokens_set
+                    for other_lemma_tokens_set in choices_lemma_tokens_set[:choice_idx]
+                ):
+                    common_list.append(True)
+                else:
+                    common_list.append(False)
 
-    def generate_text_answer(self, label, choice):
-        options = ["[A]", "[B]", "[C]", "[D]"]
-        if self.include_option_label_in_answer_and_choices:
-            text_answer = f"{options[label]} {choice.lower().strip(',')}"
-        elif self.use_option_label_as_answer_and_choices:
-            text_answer = f"{options[label]}"
-        else:
-            text_answer = choice.lower().strip(",")
-        return text_answer
+        # generate mask
+        masks = []
+        for choice, tokens, common_list in zip(
+            choices, choices_tokens, choices_token_is_common
+        ):
+            mask = ["+"] * len(choice)
+            start = 0
+            for token, is_common in zip(tokens, common_list):
+                if is_common and re.search(r"^[a-zA-Z]", token):
+                    start = choice.index(token, start)
+                    mask[start : start + len(token)] = ["-"] * len(token)
+            masks.append("".join(mask))
+        return masks
+
+    def generate_choice_str(self, choices: List[str]):
+        result = ""
+        for label, choice in zip(self.generate_labels(), choices):
+            if len(choice) > 0:
+                result += label + " " + choice + " "
+        return result
+
+    def generate_labels(self):
+        labels = []
+        for char in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            labels.append(f"({char})")
+        return labels
