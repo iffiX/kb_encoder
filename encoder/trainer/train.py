@@ -144,6 +144,8 @@ def _train(
     elif is_distributed:
         plugins.append(DDPPlugin(find_unused_parameters=True))
 
+    logging.info(f"Precision: {config.precision}")
+
     trainer = pl.Trainer(
         accelerator="gpu"
         if not (isinstance(config.gpus, int) and config.gpus == 0)

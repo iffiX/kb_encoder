@@ -175,7 +175,7 @@ class OpenBookQATrainer(pl.LightningModule):
             result = t.full(
                 [out.shape[0], self.config.generate_length], self.tokenizer.pad_token_id
             )
-            result[:, : out.shape[1]] = out.cpu()
+            result[:, : out.shape[1]] = out.to(device="cpu", dtype=t.float32)
             batch = batch.to("cpu")
             return {
                 "batch": batch,
@@ -188,7 +188,7 @@ class OpenBookQATrainer(pl.LightningModule):
                     input_ids=batch["sentence"].to(self.real_device),
                     attention_mask=batch["mask"].to(self.real_device),
                     token_type_ids=batch["type_ids"].to(self.real_device),
-                ).cpu(),
+                ).to(device="cpu", dtype=t.float32),
             }
 
     def validation_epoch_end(self, outputs):
@@ -226,7 +226,7 @@ class OpenBookQATrainer(pl.LightningModule):
             result = t.full(
                 [out.shape[0], self.config.generate_length], self.tokenizer.pad_token_id
             )
-            result[:, : out.shape[1]] = out.cpu()
+            result[:, : out.shape[1]] = out.to(device="cpu", dtype=t.float32)
             batch = batch.to("cpu")
             return {
                 "batch": batch,
@@ -239,7 +239,7 @@ class OpenBookQATrainer(pl.LightningModule):
                     input_ids=batch["sentence"].to(self.real_device),
                     attention_mask=batch["mask"].to(self.real_device),
                     token_type_ids=batch["type_ids"].to(self.real_device),
-                ).cpu(),
+                ).to(device="cpu", dtype=t.float32),
             }
 
     def test_epoch_end(self, outputs):

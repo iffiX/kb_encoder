@@ -169,25 +169,25 @@ class OpenBookQADataset:
                             target_mask.append("+")
                     target_mask = "".join(target_mask)
 
-                    # match = self.matcher.match_by_node_embedding(
-                    #     data["text_question"],
-                    #     target_sentence=target,
-                    #     target_mask=target_mask,
-                    #     seed=self.matcher_seed,
-                    #     max_times=self.matcher_config["question_match_max_times"],
-                    #     max_depth=self.matcher_config["question_match_max_depth"],
-                    #     edge_top_k=self.matcher_config["question_match_edge_top_k"],
-                    #     source_context_range=self.matcher_config[
-                    #         "question_match_source_context_range"
-                    #     ],
-                    # )
-                    # selection = self.matcher.select_paths(
-                    #     match,
-                    #     max_edges=self.matcher_config["question_select_max_edges"],
-                    #     discard_edges_if_rank_below=self.matcher_config[
-                    #         "question_select_discard_edges_if_rank_below"
-                    #     ],
-                    # )
+                    match = self.matcher.match_by_node_embedding(
+                        data["text_question"],
+                        target_sentence=target,
+                        target_mask=target_mask,
+                        seed=self.matcher_seed,
+                        max_times=self.matcher_config["question_match_max_times"],
+                        max_depth=self.matcher_config["question_match_max_depth"],
+                        edge_top_k=self.matcher_config["question_match_edge_top_k"],
+                        source_context_range=self.matcher_config[
+                            "question_match_source_context_range"
+                        ],
+                    )
+                    question_selection = self.matcher.select_paths(
+                        match,
+                        max_edges=self.matcher_config["question_select_max_edges"],
+                        discard_edges_if_rank_below=self.matcher_config[
+                            "question_select_discard_edges_if_rank_below"
+                        ],
+                    )
                     # new_question = (
                     #     self.matcher.insert_selection_at_end_preserve_case(
                     #         data["text_question"], selection
@@ -215,7 +215,7 @@ class OpenBookQADataset:
                                 "choices_match_source_context_range"
                             ],
                         )
-                        selection = self.matcher.select_paths(
+                        choice_selection = self.matcher.select_paths(
                             match,
                             max_edges=self.matcher_config["choices_select_max_edges"],
                             discard_edges_if_rank_below=self.matcher_config[
@@ -231,7 +231,15 @@ class OpenBookQADataset:
                         new_choices.append(data["text_question"] + " " + choice)
                         new_questions.append(
                             self.matcher.insert_selection_at_end_preserve_case(
-                                ", ".join(data["facts"]), selection, begin="", end=""
+                                self.matcher.insert_selection_at_end_preserve_case(
+                                    ", ".join(data["facts"]),
+                                    question_selection,
+                                    begin="",
+                                    end="",
+                                ),
+                                choice_selection,
+                                begin="",
+                                end="",
                             )
                         )
                     # new_questions = [", ".join(data["facts"])] * len(data["choices"])

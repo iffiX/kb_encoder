@@ -302,7 +302,7 @@ class Model(nn.Module):
             for b in range(0, flat_attention_mask.shape[0], self.batch_size):
                 model_input = {
                     "input_ids": flat_input_ids[b : b + self.batch_size]
-                    if input_ids is not None
+                    if flat_input_ids is not None
                     else None,
                     "attention_mask": flat_attention_mask[b : b + self.batch_size],
                     "inputs_embeds": inputs_embeds[b : b + self.batch_size]
